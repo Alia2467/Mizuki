@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 夜间模式配色 -->
+    <color name="background">#121212</color>
+    <color name="text_primary">#E0E0E0</color>
+    <color name="text_secondary">#9E9E9E</color>
+    <color name="button_bg">#2A2A2A</color>
+    <color name="box_bg">#1E1E1E</color>
+    <color name="border">#3A3A3A</color>
+    <color name="divider">#333333</color>
+    <color name="connected">#10B981</color>
+    <color name="scrim">#B0000000</color>
+    <color name="ic_launcher_background">#3B82F6</color>
+</resources>

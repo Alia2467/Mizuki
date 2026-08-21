@@ -1,0 +1,39 @@
+# 可能含 shared_token 鉴权令牌 / 本机 SDK 路径
+config.json
+local.properties
+
+# 采集记录含位置/心率等隐私数据；插件 config.toml 填入真实 user_id/token 后同样不要提交
+data/
+*.jsonl
+*.log
+
+# 构建产物走 Release/ 本地归档分发，不入库
+Release/
+*.apk
+*.exe
+*.aab
+
+.backup-duplicates/
+
+.docs/
+AGENTS.md
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+.gradle/
+build/
+captures/
+.cxx/
+*.hprof
+
+.idea/
+*.iml
+.vscode/
+
+Thumbs.db
+desktop.ini
+.DS_Store

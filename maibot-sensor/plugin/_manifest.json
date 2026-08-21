@@ -1,0 +1,46 @@
+{
+  "manifest_version": 2,
+  "version": "1.1.0",
+  "name": "maibot感知",
+  "description": "给 AI 伴侣装上感官：拉取电脑端汇聚的手机/电脑状态数据，注入上下文，并在心率、步数、天气、导航结束等情境下结合人设主动说话。",
+  "author": {
+    "name": "maibot感知",
+    "url": "https://github.com/Alia2467/Mizuki"
+  },
+  "license": "GPL-3.0",
+  "urls": {
+    "repository": "https://github.com/Alia2467/Mizuki",
+    "homepage": "https://github.com/Alia2467/Mizuki",
+    "documentation": "https://github.com/Alia2467/Mizuki",
+    "issues": "https://github.com/Alia2467/Mizuki/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.9.99"
+  },
+  "sdk": {
+    "min_version": "2.5.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "chat.get_stream_by_user_id",
+    "chat.get_stream_by_group_id",
+    "chat.open_session",
+    "maisaka.context.append",
+    "maisaka.proactive.trigger"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "display": {
+    "icon": {
+      "type": "emoji",
+      "value": "📡"
+    }
+  },
+  "id": "com.maibot.sensor"
+}

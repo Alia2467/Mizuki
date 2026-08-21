@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 纯白背景 -->
+    <color name="background">#FFFFFF</color>
+    <!-- 字体：灰偏黑 -->
+    <color name="text_primary">#333333</color>
+    <!-- 次要文字：灰 -->
+    <color name="text_secondary">#8A8A8A</color>
+    <!-- 按钮：纯白偏灰 -->
+    <color name="button_bg">#F5F5F5</color>
+    <!-- 方框背景：纯白 -->
+    <color name="box_bg">#FFFFFF</color>
+    <!-- 边框：灰 -->
+    <color name="border">#E0E0E0</color>
+    <!-- 分割线：灰（不明显） -->
+    <color name="divider">#E8E8E8</color>
+    <!-- 已连接状态色 -->
+    <color name="connected">#10B981</color>
+    <!-- 侧边栏遮罩 -->
+    <color name="scrim">#80000000</color>
+</resources>

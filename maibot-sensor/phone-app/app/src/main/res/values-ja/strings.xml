@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tab_home">ホーム</string>
+    <string name="tab_status">ステータス</string>
+    <string name="tab_settings">設定</string>
+    <string name="start_connect">接続</string>
+    <string name="disconnect">切断</string>
+    <string name="status_connected">接続済み</string>
+    <string name="status_not_connected">未接続</string>
+    <string name="user_guide">ユーザーガイド</string>
+    <string name="note">メモ</string>
+    <string name="personalize">パーソナライズ</string>
+    <string name="theme_toggle">ダークモード</string>
+    <string name="language">言語</string>
+    <string name="search">検索</string>
+    <string name="share">共有</string>
+    <string name="location">位置</string>
+    <string name="weather">天気</string>
+    <string name="device">デバイス</string>
+    <string name="token_label">認証トークン</string>
+    <string name="token_hint">空欄なら無効（コンソールの shared_token と一致させる必要があります）</string>
+</resources>

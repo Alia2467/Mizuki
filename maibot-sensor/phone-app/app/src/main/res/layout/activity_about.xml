@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- 顶部栏：返回箭头 + 标题 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="8dp">
+
+        <ImageButton
+            android:id="@+id/backButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/back"
+            android:src="@drawable/ic_back" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="@string/about"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 分割线 -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="20dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- 关于这个软件 -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="关于 maibot感知"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:lineSpacingExtra="5dp"
+                android:text="maibot感知 是「maibot · AI 伴侣感知系统」的手机端。它的用途，是让 AI 伴侣不再只靠聊天记录来「猜」你，而是通过手机采集到的真实处境——你在哪、天气如何、走了多少步、心率睡眠如何、正在用什么应用、是否在听歌或打电话——来感知你当下的状态，并由电脑端把这些信息汇总后交给 MaiBot，让它更贴心地主动关心你、提醒你、陪伴你。"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:lineSpacingExtra="5dp"
+                android:text="整个系统分三层：手机采集 → 电脑聚合 → MaiBot 注入上下文并触发主动说话。本 APP 负责的是第一层。"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp" />
+
+            <!-- 下划线 / 分割线 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="24dp"
+                android:background="@color/divider" />
+
+            <!-- 版本更新记录 -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="版本更新记录"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:lineSpacingExtra="6dp"
+                android:text="v2.0.1\n• 修复主题色为白色时连接状态文字不可见\n• 连接状态框随主题色变色\n• 首页新增下拉刷新\n• 个性设置修改后返回自动刷新\n\nv1.2.9\n• 健康数据调整：心率/睡眠需健康设备改为显示「需手表数据」，步数改用手机计步传感器\n\nv1.2.8\n• 主题色改为自定义 RGB 取色，只作用于按键颜色\n• 新增字体选择：思源黑体 / 思源宋体 / 系统默认\n• 语言设置移到「设置」页\n• 重写用户指南与关于页，新增版本更新记录\n\nv1.2.7\n• 首页新增搜索框与分享按钮\n• 新增日间 / 夜间模式切换\n• 新增记事本（分类 + 本地保存）\n• 新增个性设置页，支持多语言\n\nv1.2.6\n• 状态页重做：下拉刷新、框式字段展示\n\nv1.2.5\n• 接入健康数据（Health Connect），步数支持计步传感器兜底\n\nv1.2.4\n• 新增天气采集（Open-Meteo）与 7 天预报\n\nv1.2.3\n• 新增前台应用 / 导航 / 通话 / 音乐检测\n\nv1.2.2\n• 新增定位与城市反解析\n\nv1.2.1\n• 手机数据上报电脑端（HTTP）\n\nv1.2.0\n• 首个可用版本"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

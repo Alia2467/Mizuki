@@ -1,0 +1,66 @@
+[plugin]
+enabled = true
+config_version = "1.0.0"
+
+[source]
+data_url = "http://localhost:821/merged-data"
+token = ""          # 与控制台 config.json 的 shared_token 一致；控制台未启用鉴权时留空
+fetch_interval = 15
+request_timeout = 10
+
+[target]
+platform = "qq"
+chat_type = "private"
+user_id = ""
+group_id = ""
+
+[proactive]
+enabled = true
+cooldown_seconds = 1800
+quiet_when_navigating = true
+quiet_when_calling = true
+
+[rules]
+nav_end_enabled = true    # 导航结束问候（状态翻转检测，不进规则表）
+
+# 声明式规则表：按顺序求值，首个命中即触发；模板支持 {_me}（称呼）与 {value}（实际值）
+# op 取值：>= / > / <= / < / == / in（in 时 value 为列表）
+[[rules.table]]
+key = "heart_high"
+enabled = true
+field = "phone.health.heart_rate"
+op = ">="
+value = 100
+situation = "{_me}当前心率 {value} 次/分，偏高。"
+intent = "{_me}心率有点偏高，温柔地关心 TA，提醒 TA 别太累、注意休息。"
+
+[[rules.table]]
+key = "steps"
+enabled = true
+field = "phone.health.steps"
+op = ">="
+value = 10000
+situation = "{_me}今天已经走了 {value} 步。"
+intent = "{_me}今天走了很多路，心疼地关心 TA，让 TA 放松一下腿。"
+
+[[rules.table]]
+key = "weather_rain"
+enabled = true
+field = "phone.weather.condition"
+op = "in"
+# 候选值与契约受控词表（架构规格 §2.1）一致
+value = ["rain", "snow", "shower", "drizzle", "thunderstorm"]
+situation = "当前天气为 {value}。"
+intent = "外面在下雨（或下雪），提醒 {_me} 出门带伞、路上注意安全。"
+
+[[rules.table]]
+key = "weather_hot"
+enabled = true
+field = "phone.weather.temperature"
+op = ">="
+value = 35
+situation = "当前温度 {value} ℃，比较热。"
+intent = "天气很热，提醒 {_me} 多喝水、注意防暑。"
+
+[persona]
+appellation = "哥哥"

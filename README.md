@@ -40,13 +40,13 @@ AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机
 
 1. **手机端**：直接安装 `Release/apk/` 里的成品 APK。
 2. **电脑端**：双击 `Release/exe/Mizuki.exe`，记下电脑局域网 IP 和端口（默认 **821**）。
-3. **插件**：把 `maibot-sensor/plugin/` 整个目录拷入 MaiBot 的 `plugins/` 目录，在插件管理里启用「maibot感知」，把「主动说话目标」里的 `user_id` 改成你的 QQ 号。
+3. **插件**：把 `Mizuki/plugin/` 整个目录拷入 MaiBot 的 `plugins/` 目录，在插件管理里启用「海月感知」，把「主动说话目标」里的 `user_id` 改成你的 QQ 号。
 4. **连接**：手机 App「设置 → 连接」填电脑 IP 和端口 821，点「开始连接」，授权定位、通知、使用情况访问等权限；启用鉴权时同时填写与控制台 `shared_token` 一致的 Token。
 
 源码运行电脑端（开发环境）：
 
 ```bash
-cd maibot-sensor/computer-app
+cd Mizuki/desktop
 pip install -r requirements.txt
 python server.py        # 纯服务；python app.py 为桌面窗口入口
 ```
@@ -54,7 +54,7 @@ python server.py        # 纯服务；python app.py 为桌面窗口入口
 源码编译手机端（开发环境）：
 
 1. 安装 Android Studio（勾选 Android SDK）；手机开启开发者模式与 USB 调试（设置 → 关于手机 → 连续点「版本号」7 次）。
-2. 用 Android Studio 打开 `maibot-sensor/phone-app/`，等待 Gradle 同步（首次联网下载依赖）。
+2. 用 Android Studio 打开 `Mizuki/android/`，等待 Gradle 同步（首次联网下载依赖）。
 3. 顶部选择设备 → 点 ▶ 运行；或直接命令行 `gradle assembleDebug`（JDK 21，`local.properties` 指向本机 Android SDK）。
 
 ### 异地组网（Tailscale）
@@ -119,11 +119,11 @@ curl http://localhost:821/health
 # WebUI：浏览器打开 http://localhost:821/（exe 运行时自动弹出内嵌窗口）
 
 # 手机端 APK 源码编译
-cd maibot-sensor/phone-app
+cd Mizuki/android
 gradle assembleDebug          # Gradle 8.7 + JDK 21，local.properties 指向 D:/AndroidSDK
 
 # 电脑端 exe 打包
-cd maibot-sensor/computer-app
+cd Mizuki/desktop
 pyinstaller app.py            # 依赖见 requirements.txt
 
 # 异地组网
@@ -175,11 +175,11 @@ suzukimizuki/
 │   ├── architecture.md          # 架构规格（数据契约/模块设计/数据流）
 │   └── CHANGELOG.md             # 三端统一变更日志
 ├── Release/                     # 构建产物（按类型分子文件夹）
-│   ├── apk/                     # 手机端 APK（maibot-sensor.apk）
+│   ├── apk/                     # 手机端 APK（Mizuki.apk）
 │   └── exe/                     # 控制台发行目录（Mizuki.exe + config.json + data/）
-├── maibot-sensor/               # 唯一源码根目录
-│   ├── phone-app/               # Android 手机端（Kotlin：采集服务/主界面/地图/天气/笔记）
-│   ├── computer-app/            # 电脑端源码（server.py 服务 + collector.py 采集 + storage.py 收集装置 + app.py 桌面入口 + static/ WebUI）
+├── Mizuki/                      # 唯一源码根目录
+│   ├── android/                 # Android 手机端（Kotlin：采集服务/主界面/地图/天气/笔记）
+│   ├── desktop/                 # 电脑端源码（server.py 服务 + collector.py 采集 + storage.py 收集装置 + app.py 桌面入口 + static/ WebUI）
 │   └── plugin/                  # MaiBot 插件（plugin.py + _manifest.json + config.toml）
 └── start-tailscale.bat          # 异地组网脚本
 ```

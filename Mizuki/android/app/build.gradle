@@ -1,0 +1,58 @@
+plugins {
+    id("com.android.application")
+    id("org.jetbrains.kotlin.android")
+}
+
+android {
+    namespace = "com.mizuki.sensor"
+    compileSdk = 34
+
+    defaultConfig {
+        applicationId = "com.mizuki.sensor"
+        minSdk = 26
+        targetSdk = 34
+        versionCode = 1
+        versionName = "1.0.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    // AGP 8 默认关闭 BuildConfig 生成，而 diagnostics.app_version 依赖 VERSION_NAME
+    buildFeatures {
+        buildConfig = true
+    }
+
+    // 产物命名约定：Mizuki-v<版本号>.apk（归档至 Release/apk/），避免 AGP 默认的 app-*.apk
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = "Mizuki-v${variant.versionName}.apk"
+        }
+    }
+}
+
+dependencies {
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.google.code.gson:gson:2.10.1")
+    implementation("androidx.health.connect:connect-client:1.1.0-alpha07")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+}

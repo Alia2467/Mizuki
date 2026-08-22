@@ -167,7 +167,7 @@ start-tailscale.bat
 ## 目录结构
 
 ```
-suzukimizuki/
+Mizuki/
 ├── README.md                    # 本文档
 ├── AGENTS.md                    # 硬性编码指令与编码风格规范
 ├── LICENSE                      # GPL-3.0 全文

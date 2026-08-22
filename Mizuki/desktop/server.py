@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import threading
 import time
@@ -377,9 +378,35 @@ def stop_services() -> None:
     storage.stop()
 
 
+def _is_port_available(host: str, port: int) -> bool:
+    """检查端口是否可用。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _find_available_port(host: str, preferred: int, max_search: int = 100) -> int:
+    """从首选端口开始向上搜索可用端口。"""
+    if _is_port_available(host, preferred):
+        return preferred
+    for port in range(preferred + 1, preferred + max_search):
+        if _is_port_available(host, port):
+            return port
+    return preferred  # 搜索失败仍返回首选，让 uvicorn 报错
+
+
 def create_server() -> uvicorn.Server:
     """构造 uvicorn 服务器实例（可放入后台线程运行）。"""
-    cfg = uvicorn.Config(app, host=config["host"], port=config["port"], log_level="info")
+    host = config["host"]
+    port = _find_available_port(host, config["port"])
+    if port != config["port"]:
+        print(f"⚠ 端口 {config['port']} 被占用，自动切换到 {port}")
+        print(f"   请同步更新手机端和插件的端口配置")
+        config["port"] = port
+    cfg = uvicorn.Config(app, host=host, port=port, log_level="info")
     return uvicorn.Server(cfg)
 
 

@@ -88,6 +88,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "port": 821,
     "computer_collect_interval": 5,  # 电脑状态采集间隔（秒）
     "phone_timeout_seconds": 90,  # 超过该时长未上报视为手机离线（秒）
+    "poll_interval": 5,  # WebUI 刷新间隔（秒）
     "shared_token": "",  # 共享鉴权 token；空串表示不启用鉴权（兼容模式）
 }
 
@@ -165,6 +166,11 @@ def load_config() -> dict[str, Any]:
             pass
     CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
     return dict(DEFAULT_CONFIG)
+
+
+def save_config() -> None:
+    """将当前配置写入 config.json。"""
+    CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 config = load_config()
@@ -320,9 +326,30 @@ async def api_config() -> JSONResponse:
         "port": config["port"],
         "computer_collect_interval": config["computer_collect_interval"],
         "phone_timeout_seconds": config["phone_timeout_seconds"],
+        "poll_interval": config.get("poll_interval", 5),
+        "shared_token": config["shared_token"],
         "auth_enabled": _auth_enabled(),
         "data_file": str(storage.data_file),
     })
+
+
+@app.patch("/api/config")
+async def api_config_update(request: Request) -> JSONResponse:
+    """更新配置并持久化到 config.json。"""
+    body = await request.json()
+    allowed = {"computer_collect_interval", "phone_timeout_seconds", "shared_token", "poll_interval"}
+    updated = []
+    for key in allowed:
+        if key in body:
+            val = body[key]
+            if key in ("computer_collect_interval", "phone_timeout_seconds", "poll_interval"):
+                val = max(1, int(val))
+            config[key] = val
+            updated.append(key)
+    if "computer_collect_interval" in updated:
+        collector.interval = config["computer_collect_interval"]
+    save_config()
+    return JSONResponse({"status": "ok", "updated": updated})
 
 
 @app.get("/api/logs")

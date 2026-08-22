@@ -3,6 +3,8 @@
   "use strict";
 
   const REFRESH_MS = 3000;
+  var pollLogsTimer = null;
+  var pollTimer = null;
 
   // 快捷取值：从嵌套对象安全读取
   function pick(obj, path, fallback) {
@@ -72,11 +74,6 @@
     pill.className = "status-pill " + (online ? "online" : "offline");
     document.getElementById("status-text").textContent = online ? "手机在线" : "手机离线";
 
-    const connTag = document.getElementById("conn-tag");
-    connTag.textContent = online ? "在线" : "离线";
-    connTag.className = "tag " + (online ? "online" : "offline");
-
-    setText("conn-state", online ? "在线" : "离线", online ? "yes" : "no");
     setText("conn-device", pick(state.phone, "device_id", "—"));
     setText("conn-last-seen", state.phone_last_seen ? fmtClock(state.phone_last_seen) : "—");
 
@@ -131,15 +128,24 @@
     setText("srv-version", pick(state.server, "version", "—"));
     setText("srv-uptime", fmtUptime(pick(state.server, "uptime_seconds")));
     setText("srv-refresh", fmtClock(new Date().toISOString()));
-
-    // 原始 JSON
-    document.getElementById("raw-json").textContent = JSON.stringify(state, null, 2);
   }
 
   function renderConfig(cfg) {
     setText("cfg-port", pick(cfg, "port", "—"));
     setText("cfg-interval", pick(cfg, "computer_collect_interval", "—") + " 秒");
     setText("cfg-timeout", pick(cfg, "phone_timeout_seconds", "—") + " 秒");
+    setText("cfg-auth", pick(cfg, "auth_enabled") ? "已启用" : "未启用");
+
+    // 填充设置表单
+    document.getElementById("cfg-edit-interval").value = pick(cfg, "computer_collect_interval", 5);
+    document.getElementById("cfg-edit-timeout").value = pick(cfg, "phone_timeout_seconds", 90);
+    document.getElementById("cfg-edit-token").value = pick(cfg, "shared_token", "");
+    document.getElementById("cfg-edit-poll").value = pick(cfg, "poll_interval", 5);
+
+    // 更新轮询间隔
+    var newInterval = (pick(cfg, "poll_interval", 5)) * 1000;
+    if (pollLogsTimer) clearInterval(pollLogsTimer);
+    pollLogsTimer = setInterval(pollLogs, newInterval);
   }
 
   function renderLogs(records) {
@@ -195,16 +201,91 @@
     } catch (err) { /* 忽略 */ }
   }
 
-  document.getElementById("refresh-btn").addEventListener("click", function () {
-    poll();
-    pollConfig();
-    pollLogs();
+  // 设置面板
+  var settingsCard = document.getElementById("settings-card");
+  document.getElementById("settings-btn").addEventListener("click", function () {
+    settingsCard.style.display = settingsCard.style.display === "none" ? "block" : "none";
+  });
+  document.getElementById("settings-close").addEventListener("click", function () {
+    settingsCard.style.display = "none";
+  });
+  document.getElementById("settings-save").addEventListener("click", async function () {
+    var msg = document.getElementById("settings-msg");
+    var body = {
+      computer_collect_interval: parseInt(document.getElementById("cfg-edit-interval").value) || 5,
+      phone_timeout_seconds: parseInt(document.getElementById("cfg-edit-timeout").value) || 90,
+      shared_token: document.getElementById("cfg-edit-token").value.trim(),
+      poll_interval: parseInt(document.getElementById("cfg-edit-poll").value) || 5,
+    };
+    try {
+      var resp = await fetch("/api/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (resp.ok) {
+        msg.className = "settings-msg";
+        msg.textContent = "已保存";
+        pollConfig();
+      } else {
+        msg.className = "settings-msg error";
+        msg.textContent = "保存失败";
+      }
+    } catch (err) {
+      msg.className = "settings-msg error";
+      msg.textContent = "网络错误";
+    }
+    setTimeout(function () { msg.textContent = ""; }, 3000);
+  });
+
+  // 夜间模式（圆形扩展动画）
+  var themeBtn = document.getElementById("theme-btn");
+  var isDark = localStorage.getItem("mizuki-dark") === "1";
+
+  function setTheme(dark, x, y) {
+    var html = document.documentElement;
+    if (x !== undefined) {
+      var overlay = document.createElement("div");
+      overlay.className = "theme-reveal";
+      overlay.style.background = dark ? "#0f1117" : "#f6f7fb";
+      var size = Math.sqrt(window.innerWidth * window.innerWidth + window.innerHeight * window.innerHeight) * 2;
+      overlay.style.width = size + "px";
+      overlay.style.height = size + "px";
+      overlay.style.left = (x - size / 2) + "px";
+      overlay.style.top = (y - size / 2) + "px";
+      document.body.appendChild(overlay);
+      void overlay.offsetWidth;
+      overlay.classList.add("active");
+      // 展开到一半时切换主题，此时覆盖层已遮住整个屏幕
+      setTimeout(function () {
+        html.classList.toggle("dark", dark);
+        localStorage.setItem("mizuki-dark", dark ? "1" : "0");
+        themeBtn.textContent = dark ? "☀" : "🌙";
+        themeBtn.title = dark ? "日间模式" : "夜间模式";
+        // 淡出覆盖层
+        overlay.style.transition = "opacity 0.3s ease";
+        overlay.style.opacity = "0";
+        setTimeout(function () { overlay.remove(); }, 300);
+      }, 400);
+    } else {
+      html.classList.toggle("dark", dark);
+      localStorage.setItem("mizuki-dark", dark ? "1" : "0");
+      themeBtn.textContent = dark ? "☀" : "🌙";
+      themeBtn.title = dark ? "日间模式" : "夜间模式";
+    }
+  }
+
+  setTheme(isDark);
+  themeBtn.addEventListener("click", function (e) {
+    var rect = themeBtn.getBoundingClientRect();
+    setTheme(!document.documentElement.classList.contains("dark"),
+      rect.left + rect.width / 2, rect.top + rect.height / 2);
   });
 
   poll();
   pollConfig();
   pollLogs();
   setInterval(poll, REFRESH_MS);
-  setInterval(pollLogs, 5000);
+  pollLogsTimer = setInterval(pollLogs, 5000);
   setInterval(pollConfig, 60000);
 })();

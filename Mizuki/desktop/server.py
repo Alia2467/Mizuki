@@ -53,7 +53,7 @@ from storage import DataCollector
 # ----------------------------------------------------------------------
 # 常量与路径（兼容 PyInstaller 打包：程序目录 vs 资源目录分离）
 # ----------------------------------------------------------------------
-VERSION = "1.0.0"
+VERSION = "2.4.2"
 
 # 值取 config.json 的 shared_token；手机上报与插件拉取共用同一请求头
 TOKEN_HEADER = "X-Sensor-Token"
@@ -86,7 +86,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
     "port": 821,
     "computer_collect_interval": 5,  # 电脑状态采集间隔（秒）
-    "phone_timeout_seconds": 30,  # 超过该时长未上报视为手机离线（秒）
+    "phone_timeout_seconds": 90,  # 超过该时长未上报视为手机离线（秒）
     "shared_token": "",  # 共享鉴权 token；空串表示不启用鉴权（兼容模式）
 }
 

@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import threading
 import time
@@ -86,7 +87,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
     "port": 821,
     "computer_collect_interval": 5,  # 电脑状态采集间隔（秒）
-    "phone_timeout_seconds": 30,  # 超过该时长未上报视为手机离线（秒）
+    "phone_timeout_seconds": 90,  # 超过该时长未上报视为手机离线（秒）
+    "poll_interval": 5,  # WebUI 刷新间隔（秒）
     "shared_token": "",  # 共享鉴权 token；空串表示不启用鉴权（兼容模式）
 }
 
@@ -164,6 +166,11 @@ def load_config() -> dict[str, Any]:
             pass
     CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), encoding="utf-8")
     return dict(DEFAULT_CONFIG)
+
+
+def save_config() -> None:
+    """将当前配置写入 config.json。"""
+    CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 config = load_config()
@@ -319,9 +326,30 @@ async def api_config() -> JSONResponse:
         "port": config["port"],
         "computer_collect_interval": config["computer_collect_interval"],
         "phone_timeout_seconds": config["phone_timeout_seconds"],
+        "poll_interval": config.get("poll_interval", 5),
+        "shared_token": config["shared_token"],
         "auth_enabled": _auth_enabled(),
         "data_file": str(storage.data_file),
     })
+
+
+@app.patch("/api/config")
+async def api_config_update(request: Request) -> JSONResponse:
+    """更新配置并持久化到 config.json。"""
+    body = await request.json()
+    allowed = {"computer_collect_interval", "phone_timeout_seconds", "shared_token", "poll_interval"}
+    updated = []
+    for key in allowed:
+        if key in body:
+            val = body[key]
+            if key in ("computer_collect_interval", "phone_timeout_seconds", "poll_interval"):
+                val = max(1, int(val))
+            config[key] = val
+            updated.append(key)
+    if "computer_collect_interval" in updated:
+        collector.interval = config["computer_collect_interval"]
+    save_config()
+    return JSONResponse({"status": "ok", "updated": updated})
 
 
 @app.get("/api/logs")
@@ -377,9 +405,35 @@ def stop_services() -> None:
     storage.stop()
 
 
+def _is_port_available(host: str, port: int) -> bool:
+    """检查端口是否可用。"""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _find_available_port(host: str, preferred: int, max_search: int = 100) -> int:
+    """从首选端口开始向上搜索可用端口。"""
+    if _is_port_available(host, preferred):
+        return preferred
+    for port in range(preferred + 1, preferred + max_search):
+        if _is_port_available(host, port):
+            return port
+    return preferred  # 搜索失败仍返回首选，让 uvicorn 报错
+
+
 def create_server() -> uvicorn.Server:
     """构造 uvicorn 服务器实例（可放入后台线程运行）。"""
-    cfg = uvicorn.Config(app, host=config["host"], port=config["port"], log_level="info")
+    host = config["host"]
+    port = _find_available_port(host, config["port"])
+    if port != config["port"]:
+        print(f"⚠ 端口 {config['port']} 被占用，自动切换到 {port}")
+        print(f"   请同步更新手机端和插件的端口配置")
+        config["port"] = port
+    cfg = uvicorn.Config(app, host=host, port=port, log_level="info")
     return uvicorn.Server(cfg)
 
 

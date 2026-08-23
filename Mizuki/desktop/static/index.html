@@ -12,28 +12,59 @@
     <header class="topbar">
       <div class="brand">
         <div>
-          <h1 class="brand-title">控制台</h1>
-          <p class="brand-sub">连接中枢 · 数据汇聚</p>
+          <h1 class="brand-title">海月之音</h1>
         </div>
       </div>
-      <div class="status-pill" id="status-pill">
-        <span class="dot"></span>
-        <span id="status-text">连接中…</span>
+      <div class="topbar-right">
+        <button class="icon-btn" id="theme-btn" type="button" title="夜间模式">🌙</button>
+        <button class="icon-btn" id="settings-btn" type="button" title="设置">⚙</button>
       </div>
     </header>
 
+    <!-- 设置面板 -->
+    <section class="card settings-card" id="settings-card" style="display:none">
+      <div class="card-head">
+        <h2>⚙️ 设置</h2>
+        <button class="btn-close" id="settings-close" type="button">✕</button>
+      </div>
+      <div class="settings-form">
+        <div class="field">
+          <label for="cfg-edit-interval">采集间隔（秒）</label>
+          <input type="number" id="cfg-edit-interval" min="1" max="300" />
+        </div>
+        <div class="field">
+          <label for="cfg-edit-timeout">离线判定（秒）</label>
+          <input type="number" id="cfg-edit-timeout" min="10" max="600" />
+        </div>
+        <div class="field">
+          <label for="cfg-edit-token">鉴权 Token</label>
+          <input type="text" id="cfg-edit-token" placeholder="留空则不启用鉴权" />
+        </div>
+        <div class="field">
+          <label for="cfg-edit-poll">上报间隔（秒）</label>
+          <input type="number" id="cfg-edit-poll" min="1" max="60" />
+        </div>
+        <div class="settings-actions">
+          <button class="btn-save" id="settings-save" type="button">保存</button>
+          <span class="settings-msg" id="settings-msg"></span>
+        </div>
+      </div>
+    </section>
+
     <!-- 卡片网格 -->
     <main class="grid">
-      <!-- 手机连接 -->
+      <!-- 手机状态（连接 + 使用合并） -->
       <section class="card card--span2" id="card-phone-conn">
         <div class="card-head">
-          <h2>📱 手机连接</h2>
-          <span class="tag" id="conn-tag">—</span>
+          <h2>📱 手机状态</h2>
+          <span class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">连接中…</span></span>
         </div>
         <div class="kv">
-          <div class="kv-row"><span class="kv-key">状态</span><span class="kv-val" id="conn-state">—</span></div>
           <div class="kv-row"><span class="kv-key">设备 ID</span><span class="kv-val" id="conn-device">—</span></div>
           <div class="kv-row"><span class="kv-key">最近上报</span><span class="kv-val" id="conn-last-seen">—</span></div>
+          <div class="kv-row"><span class="kv-key">前台应用</span><span class="kv-val" id="use-app">—</span></div>
+          <div class="kv-row"><span class="kv-key">导航中</span><span class="kv-val" id="use-nav">—</span></div>
+          <div class="kv-row"><span class="kv-key">通话中</span><span class="kv-val" id="use-call">—</span></div>
         </div>
       </section>
 
@@ -57,26 +88,6 @@
         </div>
       </section>
 
-      <!-- 健康 -->
-      <section class="card">
-        <div class="card-head"><h2>❤️ 健康</h2></div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">心率</span><span class="kv-val" id="hlt-heart">—</span></div>
-          <div class="kv-row"><span class="kv-key">步数</span><span class="kv-val" id="hlt-steps">—</span></div>
-          <div class="kv-row"><span class="kv-key">睡眠</span><span class="kv-val" id="hlt-sleep">—</span></div>
-        </div>
-      </section>
-
-      <!-- 手机使用 -->
-      <section class="card">
-        <div class="card-head"><h2>📲 手机使用</h2></div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">前台应用</span><span class="kv-val" id="use-app">—</span></div>
-          <div class="kv-row"><span class="kv-key">导航中</span><span class="kv-val" id="use-nav">—</span></div>
-          <div class="kv-row"><span class="kv-key">通话中</span><span class="kv-val" id="use-call">—</span></div>
-        </div>
-      </section>
-
       <!-- 手机诊断 -->
       <section class="card card--span2">
         <div class="card-head"><h2>🔧 手机诊断</h2></div>
@@ -87,6 +98,16 @@
           <div class="kv-row"><span class="kv-key">权限</span><span class="kv-val" id="diag-perms">—</span></div>
           <div class="kv-row"><span class="kv-key">警告</span><span class="kv-val" id="diag-warnings">—</span></div>
           <div class="kv-row"><span class="kv-key">最近错误</span><span class="kv-val" id="diag-error">—</span></div>
+        </div>
+      </section>
+
+      <!-- 健康 -->
+      <section class="card">
+        <div class="card-head"><h2>❤️ 健康</h2></div>
+        <div class="kv">
+          <div class="kv-row"><span class="kv-key">心率</span><span class="kv-val" id="hlt-heart">—</span></div>
+          <div class="kv-row"><span class="kv-key">步数</span><span class="kv-val" id="hlt-steps">—</span></div>
+          <div class="kv-row"><span class="kv-key">睡眠</span><span class="kv-val" id="hlt-sleep">—</span></div>
         </div>
       </section>
 
@@ -111,6 +132,7 @@
           <div class="kv-row"><span class="kv-key">端口</span><span class="kv-val" id="cfg-port">—</span></div>
           <div class="kv-row"><span class="kv-key">采集间隔</span><span class="kv-val" id="cfg-interval">—</span></div>
           <div class="kv-row"><span class="kv-key">离线判定</span><span class="kv-val" id="cfg-timeout">—</span></div>
+          <div class="kv-row"><span class="kv-key">鉴权</span><span class="kv-val" id="cfg-auth">—</span></div>
           <div class="kv-row"><span class="kv-key">最后刷新</span><span class="kv-val" id="srv-refresh">—</span></div>
         </div>
       </section>
@@ -123,17 +145,10 @@
         <div class="logs-body" id="logs-body">
           <div class="logs-empty">暂无记录</div>
         </div>
-        <button class="refresh-btn" id="refresh-btn" type="button">🔄 刷新</button>
       </section>
     </div>
 
-    <!-- 原始 JSON -->
-    <details class="raw">
-      <summary>查看原始数据 (JSON)</summary>
-      <pre id="raw-json">—</pre>
-    </details>
 
-    <footer class="foot">数据仅在本地流转 · 手机 → 电脑 → MaiBot</footer>
   </div>
 
   <script src="/static/app.js"></script>

@@ -1,8 +1,8 @@
-# Mizuki（海月感知）
+# Mizuki
 
 AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机端采集定位、天气、健康与设备使用状态并实时上报，电脑端汇聚双端数据并落盘，MaiBot 插件把处境翻译成情境上下文，驱动 AI 伴侣「海月」在心率过高、下雨、导航结束等真实情境下结合人设主动关心——不是固定模板，是她自己生成的话。
 
-当前版本：控制台 **v2.4.0** / 手机端 **v2.1.0** / 插件 **v1.1.0**
+当前版本： **v1.0.0**
 
 ---
 
@@ -36,7 +36,7 @@ AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机
 
 ## 安装
 
-**前置要求**：手机 Android 8.0+（minSdk 26）；电脑 Windows 10/11（内嵌窗口依赖系统自带 WebView2）；MaiBot 1.x + maibot_sdk 2.5+；手机与电脑同一局域网（异地则先组 Tailscale）。
+**前置要求**：手机 Android 8.0+（minSdk 26）；电脑 Windows 10/11；MaiBot 1.x + maibot_sdk 2.5+；手机与电脑同一局域网（异地则先组 Tailscale）。
 
 1. **手机端**：直接安装 `Release/apk/` 里的成品 APK。
 2. **电脑端**：双击 `Release/exe/Mizuki.exe`，记下电脑局域网 IP 和端口（默认 **821**）。
@@ -79,7 +79,8 @@ python server.py        # 纯服务；python app.py 为桌面窗口入口
 | `host` | 监听地址，默认 `0.0.0.0` |
 | `port` | 服务端口，默认 `821`（三端共识值） |
 | `computer_collect_interval` | 电脑状态采集间隔（秒），默认 `5` |
-| `phone_timeout_seconds` | 超过该时长未上报视为手机离线，默认 `30` |
+| `phone_timeout_seconds` | 超过该时长未上报视为手机离线，默认 `90` |
+| `poll_interval` | WebUI 仪表盘轮询间隔（秒），默认 `5` |
 | `shared_token` | 共享鉴权令牌，空串 = 不启用鉴权的兼容模式 |
 
 **插件** `config.toml`（六分节，关键可选项）：
@@ -139,7 +140,7 @@ start-tailscale.bat
 | 首页横幅图片 | 点一下横幅 → 从相册选图 |
 | 首页那行字 | 点一下文字 → 弹窗修改 |
 | 侧边栏顶部 | 一个随主题色变化的相框 |
-| 主题色 | 个性设置里 RGB 自定义（默认纯白），只作用于按键 |
+| 主题色 | 个性设置里 RGB 自定义，只作用于按键 |
 | 字体 | 个性设置里选 系统默认 / 思源黑体 / 思源宋体 |
 
 ---
@@ -167,20 +168,14 @@ start-tailscale.bat
 ## 目录结构
 
 ```
-suzukimizuki/
+Mizuki/
 ├── README.md                    # 本文档
-├── AGENTS.md                    # 硬性编码指令与编码风格规范
 ├── LICENSE                      # GPL-3.0 全文
-├── .docs/
-│   ├── architecture.md          # 架构规格（数据契约/模块设计/数据流）
-│   └── CHANGELOG.md             # 三端统一变更日志
-├── Release/                     # 构建产物（按类型分子文件夹）
-│   ├── apk/                     # 手机端 APK（Mizuki.apk）
-│   └── exe/                     # 控制台发行目录（Mizuki.exe + config.json + data/）
-├── Mizuki/                      # 唯一源码根目录
-│   ├── android/                 # Android 手机端（Kotlin：采集服务/主界面/地图/天气/笔记）
-│   ├── desktop/                 # 电脑端源码（server.py 服务 + collector.py 采集 + storage.py 收集装置 + app.py 桌面入口 + static/ WebUI）
-│   └── plugin/                  # MaiBot 插件（plugin.py + _manifest.json + config.toml）
+├── Mizuki/                      # 源码根目录
+│   ├── android/                 # Android 手机端
+│   ├── desktop/                 # 电脑端源码
+│   └── plugin/                  # MaiBot 插件
+├── test/                        # 自动化测试
 └── start-tailscale.bat          # 异地组网脚本
 ```
 
@@ -188,20 +183,23 @@ suzukimizuki/
 
 ## 技术栈
 
-- **手机端**：Kotlin 1.9.24、OkHttp、Gson、Google Fused Location、Health Connect、Leaflet（离线地图）
+- **手机端**：Kotlin 1.9.24、OkHttp、Gson、Google Fused Location、Health Connect、Leaflet
 - **电脑端**：FastAPI、uvicorn、psutil、pywin32、pywebview、pystray、Pillow、PyInstaller
 - **插件**：maibot_sdk 2.5+、httpx、asyncio
-- **数据**：JSON over HTTP（局域网明文，默认端口 821），落盘 JSONL
-- **构建**：AGP 8.4.2 + Gradle 8.7 + JDK 21（手机）；Python 3.13（电脑）
+- **数据**：JSON over HTTP，落盘 JSONL
+- **构建**：AGP 8.4.2 + Gradle 8.7 + JDK 21；Python 3.13
 
 ---
 
 ## 验证
 
-暂无自动化测试框架，端到端验收步骤（链路/落盘/离线判定/五条规则/自诊断）见 `AGENTS.md`「测试与验证规范」一节。
+```bash
+# 运行自动化测试
+py -m pytest test/ -v
+```
 
 ---
 
 ## License
 
-GPL-3.0，全文见 [`LICENSE`](LICENSE)。
+GPL-3.0

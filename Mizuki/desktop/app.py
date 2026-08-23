@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
 import sys
 import threading
 
@@ -49,8 +51,19 @@ def make_icon() -> Image.Image:
         return img
 
 
+def _acquire_single_instance_lock() -> bool:
+    """尝试获取全局互斥体，确保只有一个实例运行。返回 True 表示获取成功。"""
+    mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\MizukiConsole")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        return False
+    return True
+
+
 def main() -> None:
     """桌面入口：内嵌窗口 + 系统托盘，服务在后台持续运行。"""
+    if not _acquire_single_instance_lock():
+        ctypes.windll.user32.MessageBoxW(0, "海月感知控制台已在运行中。", "海月感知", 0x40)
+        sys.exit(0)
     _redirect_logs()
     start_services()
     server = create_server()
@@ -94,6 +107,8 @@ def main() -> None:
                 pass
         server.should_exit = True
         stop_services()
+        # 强制退出进程，避免残留
+        os._exit(0)
 
     menu = pystray.Menu(
         pystray.MenuItem("显示窗口", show_window, default=True),

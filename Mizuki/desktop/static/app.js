@@ -164,6 +164,28 @@
     setText("srv-version", pick(state.server, "version", "—"));
     setText("srv-uptime", fmtUptime(pick(state.server, "uptime_seconds")));
     setText("srv-refresh", fmtClock(new Date().toISOString()));
+
+    // 插件连接状态
+    renderPluginStatus(state.plugins);
+  }
+
+  function renderPluginStatus(plugins) {
+    var pill = document.getElementById("plugin-pill");
+    var text = document.getElementById("plugin-text");
+    if (!plugins || !plugins.length) {
+      pill.className = "status-pill offline";
+      text.textContent = "插件 离线";
+      return;
+    }
+    var online = plugins.filter(function (p) { return p.online; }).length;
+    var total = plugins.length;
+    if (online > 0) {
+      pill.className = "status-pill online";
+      text.textContent = "插件 " + online + "/" + total + " 在线";
+    } else {
+      pill.className = "status-pill offline";
+      text.textContent = "插件 离线";
+    }
   }
 
   function renderConfig(cfg) {
@@ -313,6 +335,13 @@
     }
   }
 
+  async function pollPluginStatus() {
+    try {
+      const resp = await fetch("/api/plugin-status", { cache: "no-store" });
+      if (resp.ok) renderPluginStatus((await resp.json()).plugins);
+    } catch (err) { /* 忽略 */ }
+  }
+
   setTheme(isDark);
   themeBtn.addEventListener("click", function (e) {
     var rect = themeBtn.getBoundingClientRect();
@@ -323,7 +352,9 @@
   poll();
   pollConfig();
   pollLogs();
+  pollPluginStatus();
   setInterval(poll, REFRESH_MS);
   pollLogsTimer = setInterval(pollLogs, 5000);
   setInterval(pollConfig, 60000);
+  setInterval(pollPluginStatus, 10000);
 })();

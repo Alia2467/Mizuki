@@ -31,6 +31,7 @@ import socket
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,10 @@ config = load_config()
 collector = ComputerCollector(interval=config["computer_collect_interval"] / 1000)
 storage = DataCollector(data_file=DATA_FILE)  # 收集装置：队列 + 专用写盘线程，与主服务解耦
 
+# 插件心跳追踪（plugin_id -> 最后心跳时间）
+_plugin_heartbeats: dict[str, datetime] = {}
+_PLUGIN_HEARTBEAT_TIMEOUT = 60  # 秒，超过此时间未心跳视为离线
+
 
 # ----------------------------------------------------------------------
 # 辅助函数
@@ -263,7 +268,6 @@ def _build_state() -> dict[str, Any]:
         }
     except Exception as exc:
         print(f"[_build_state] 异常: {exc}")
-        import traceback
         traceback.print_exc()
         return {
             "timestamp": _iso_now(),
@@ -343,7 +347,6 @@ async def merged_data(request: Request) -> JSONResponse:
         return JSONResponse(_merged_data())
     except Exception as exc:
         print(f"[merged-data] 异常: {exc}")
-        import traceback
         traceback.print_exc()
         return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
 
@@ -395,6 +398,30 @@ async def api_logs(limit: int = 20) -> JSONResponse:
         except Exception:
             continue
     return JSONResponse(records)
+
+
+@app.post("/api/plugin-heartbeat")
+async def plugin_heartbeat(request: Request) -> JSONResponse:
+    """插件心跳上报（插件定期调用，用于 WebUI 显示插件连接状态）。"""
+    body = await request.json()
+    plugin_id = body.get("plugin_id", "unknown")
+    _plugin_heartbeats[plugin_id] = datetime.now()
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/api/plugin-status")
+async def plugin_status() -> JSONResponse:
+    """返回插件连接状态（供 WebUI 展示）。"""
+    now = datetime.now()
+    plugins = []
+    for plugin_id, last_beat in _plugin_heartbeats.items():
+        elapsed = (now - last_beat).total_seconds()
+        plugins.append({
+            "plugin_id": plugin_id,
+            "last_seen": last_beat.isoformat(timespec="seconds"),
+            "online": elapsed < _PLUGIN_HEARTBEAT_TIMEOUT,
+        })
+    return JSONResponse({"plugins": plugins, "timeout": _PLUGIN_HEARTBEAT_TIMEOUT})
 
 
 def _read_tail_lines(path: Path, limit: int) -> list[str]:

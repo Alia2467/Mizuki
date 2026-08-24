@@ -44,7 +44,7 @@ class SourceConfig(PluginConfigBase):
 
     data_url: str = Field(default="http://localhost:821/merged-data", description="电脑端合并数据接口地址")
     token: str = Field(default="", description="共享鉴权 token（与控制台 config.json 的 shared_token 一致；控制台未启用鉴权时留空）")
-    fetch_interval: int = Field(default=15000, ge=300, description="数据拉取间隔（毫秒）")
+    fetch_interval: int = Field(default=300, ge=100, description="数据拉取间隔（毫秒）")
 
 
 class TargetConfig(PluginConfigBase):
@@ -67,8 +67,7 @@ class ProactiveConfig(PluginConfigBase):
     __ui_icon__ = "message-circle"
     __ui_order__ = 3
 
-    enabled: bool = Field(default=True, description="是否启用主动说话")
-    cooldown_ms: int = Field(default=1800000, ge=60000, description="同一触发条件的冷却时间（毫秒）")
+    cooldown_ms: int = Field(default=180000, ge=60000, description="同一触发条件的冷却时间（毫秒）")
 
 
 class RuleSpec(PluginConfigBase):
@@ -152,6 +151,15 @@ class MizukiSensorPlugin(MaiBotPlugin):
         self._last_navigating: bool = False
         self._last_spoken: dict[str, float] = {}
         self._connection_status: str = "unknown"
+        self._http_client: httpx.AsyncClient | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+
+    @property
+    def _http(self) -> httpx.AsyncClient:
+        """复用 httpx 客户端（避免每次请求重建连接）。"""
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=3)
+        return self._http_client
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -160,6 +168,8 @@ class MizukiSensorPlugin(MaiBotPlugin):
         self._get_logger().info("海月感知插件已加载")
         # 启动时检测连接状态
         await self._test_connection()
+        # 启动心跳上报
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         if self.config.plugin.enabled:
             self._loop_task = asyncio.create_task(self._main_loop())
 
@@ -170,7 +180,17 @@ class MizukiSensorPlugin(MaiBotPlugin):
                 await self._loop_task
             except asyncio.CancelledError:
                 pass
+        if self._heartbeat_task is not None and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
         self._loop_task = None
+        self._heartbeat_task = None
         self._get_logger().info("海月感知插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
@@ -191,26 +211,41 @@ class MizukiSensorPlugin(MaiBotPlugin):
         if self.config.source.token:
             headers[TOKEN_HEADER] = self.config.source.token
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code == 200:
-                    body = resp.json()
-                    if body.get("status") == "ok":
-                        self._connection_status = "connected"
-                        self._get_logger().info(
-                            "控制台连接成功: version=%s phone_connected=%s",
-                            body.get("version", "unknown"),
-                            body.get("phone_connected", "unknown"),
-                        )
-                    else:
-                        self._connection_status = "error"
-                        self._get_logger().warning("控制台响应异常: %s", body)
+            resp = await self._http.get(url, headers=headers)
+            if resp.status_code == 200:
+                body = resp.json()
+                if body.get("status") == "ok":
+                    self._connection_status = "connected"
+                    self._get_logger().info(
+                        "控制台连接成功: version=%s phone_connected=%s",
+                        body.get("version", "unknown"),
+                        body.get("phone_connected", "unknown"),
+                    )
                 else:
                     self._connection_status = "error"
-                    self._get_logger().warning("控制台返回错误: HTTP %s", resp.status_code)
+                    self._get_logger().warning("控制台响应异常: %s", body)
+            else:
+                self._connection_status = "error"
+                self._get_logger().warning("控制台返回错误: HTTP %s", resp.status_code)
         except Exception as exc:
             self._connection_status = "disconnected"
             self._get_logger().error("控制台连接失败: %s", exc)
+
+    # ------------------------------------------------------------------
+    # 心跳上报
+    # ------------------------------------------------------------------
+    async def _heartbeat_loop(self) -> None:
+        """定期向控制台上报心跳（供 WebUI 显示插件连接状态）。"""
+        heartbeat_url = self.config.source.data_url.replace("/merged-data", "/plugin-heartbeat")
+        while True:
+            try:
+                headers: dict[str, str] = {}
+                if self.config.source.token:
+                    headers[TOKEN_HEADER] = self.config.source.token
+                await self._http.post(heartbeat_url, json={"plugin_id": "mizuki-sensor"}, headers=headers)
+            except Exception:
+                pass  # 心跳失败不影响主功能
+            await asyncio.sleep(30)
 
     # ------------------------------------------------------------------
     # 主循环
@@ -223,7 +258,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
                 raise
             except Exception as exc:
                 self._get_logger().error("海月感知主循环异常: %s", exc)
-            await asyncio.sleep(max(5000, int(self.config.source.fetch_interval)) / 1000)
+            await asyncio.sleep(int(self.config.source.fetch_interval) / 1000)
 
     async def _tick(self) -> None:
         data = await self._fetch_data()
@@ -252,9 +287,6 @@ class MizukiSensorPlugin(MaiBotPlugin):
 
         self._last_navigating = is_navigating
 
-        # 主动说话关闭时跳过
-        if not self.config.proactive.enabled:
-            return
         # 安静模式：导航中/通话中不说话
         if is_navigating or is_calling:
             return
@@ -321,15 +353,14 @@ class MizukiSensorPlugin(MaiBotPlugin):
         if self.config.source.token:
             headers[TOKEN_HEADER] = self.config.source.token
         try:
-            async with httpx.AsyncClient(timeout=3) as client:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code != 200:
-                    self._connection_status = "error"
-                    self._get_logger().warning("拉取数据失败: HTTP %s", resp.status_code)
-                    return {}
-                data = resp.json()
-                self._connection_status = "connected"
-                return data if isinstance(data, dict) else {}
+            resp = await self._http.get(url, headers=headers)
+            if resp.status_code != 200:
+                self._connection_status = "error"
+                self._get_logger().warning("拉取数据失败: HTTP %s", resp.status_code)
+                return {}
+            data = resp.json()
+            self._connection_status = "connected"
+            return data if isinstance(data, dict) else {}
         except Exception as exc:
             self._connection_status = "disconnected"
             self._get_logger().warning("拉取电脑端数据失败: %s", exc)

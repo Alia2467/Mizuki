@@ -11,6 +11,7 @@ Windows 下使用 win32gui + psutil；其他平台优雅降级为占位值。
 from __future__ import annotations
 
 import threading
+import time
 from datetime import datetime
 from typing import Any
 
@@ -73,6 +74,8 @@ class ComputerCollector:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._local_ip_cache: str = ""
+        self._local_ip_time: float = 0
 
     # ------------------------------------------------------------------
     # 采集逻辑
@@ -119,14 +122,19 @@ class ComputerCollector:
             "is_navigating": self._contains_any(title, NAVIGATION_KEYWORDS),
         }
 
-    @staticmethod
-    def _local_ip() -> str:
-        """获取本机局域网 IP（UDP 探测法，取实际出站的接口地址）。"""
+    def _local_ip(self) -> str:
+        """获取本机局域网 IP（UDP 探测法，60 秒缓存）。"""
+        now = time.time()
+        if self._local_ip_cache and now - self._local_ip_time < 60:
+            return self._local_ip_cache
         import socket
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
+                ip = s.getsockname()[0]
+                self._local_ip_cache = ip
+                self._local_ip_time = now
+                return ip
         except Exception:
             return "127.0.0.1"
 

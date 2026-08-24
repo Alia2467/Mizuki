@@ -5,7 +5,7 @@ config_version = "1.0.0"
 [source]
 data_url = "http://localhost:821/merged-data"
 token = ""          # 与控制台 config.json 的 shared_token 一致；控制台未启用鉴权时留空
-fetch_interval = 15000
+fetch_interval = 300
 
 [target]
 platform = "qq"
@@ -14,8 +14,7 @@ user_id = ""
 group_id = ""
 
 [proactive]
-enabled = true
-cooldown_ms = 1800000
+cooldown_ms = 180000
 
 [rules]
 

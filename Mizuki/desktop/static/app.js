@@ -33,6 +33,34 @@
     return String(val);
   }
 
+  // 硬件仪表盘：通过 SVG stroke-dasharray 渲染环形进度
+  const HW_CIRC = 264; // 2 * π * 42 ≈ 264
+
+  function renderHardwareGauge(suffix, pct, sub) {
+    const pctEl = document.getElementById("hw-" + suffix + "-pct");
+    const ringEl = document.querySelector(".hw-ring-" + suffix);
+    if (!pctEl) return;
+    if (pct === undefined || pct === null || pct === 0) {
+      pctEl.textContent = "—";
+      if (ringEl) { ringEl.style.strokeDashoffset = HW_CIRC; ringEl.className.baseVal = "hw-ring-fill hw-ring-" + suffix; }
+      const subEl = document.getElementById("hw-" + suffix + "-sub");
+      if (subEl) subEl.textContent = "—";
+      return;
+    }
+    const val = Math.max(0, Math.min(100, parseInt(pct) || 0));
+    pctEl.textContent = val;
+    const offset = HW_CIRC - (val / 100) * HW_CIRC;
+    if (ringEl) {
+      ringEl.style.strokeDashoffset = offset;
+      const cls = "hw-ring-fill hw-ring-" + suffix + (val >= 80 ? " high" : val >= 60 ? " mid" : "");
+      ringEl.className.baseVal = cls;
+    }
+    if (sub) {
+      const subEl = document.getElementById("hw-" + suffix + "-sub");
+      if (subEl) subEl.textContent = sub;
+    }
+  }
+
   function setText(id, text, cls) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -117,12 +145,20 @@
     setText("diag-warnings", warnings.length ? warnings.join("；") : "无", warnings.length ? "no" : "");
 
     // 电脑状态
+    setText("pc-ip", pick(state.computer, "local_ip", "—"));
     setText("pc-window", pick(state.computer, "foreground_window", "—"));
     setText("pc-process", pick(state.computer, "foreground_process", "—"));
     const flags = [];
     if (pick(state.computer, "is_gaming")) flags.push("🎮 游戏中");
     if (pick(state.computer, "is_navigating")) flags.push("🧭 导航中");
     setText("pc-flags", flags.length ? flags.join(" · ") : "正常", flags.length ? "yes" : "");
+
+    // 系统硬件
+    renderHardwareGauge("cpu", pick(state.computer, "cpu_percent"));
+    renderHardwareGauge("mem", pick(state.computer, "memory_percent"),
+      pick(state.computer, "memory_used_gb") + " / " + pick(state.computer, "memory_total_gb") + " GB");
+    renderHardwareGauge("disk", pick(state.computer, "disk_percent"),
+      pick(state.computer, "disk_used_gb") + " / " + pick(state.computer, "disk_total_gb") + " GB");
 
     // 服务
     setText("srv-version", pick(state.server, "version", "—"));
@@ -132,18 +168,18 @@
 
   function renderConfig(cfg) {
     setText("cfg-port", pick(cfg, "port", "—"));
-    setText("cfg-interval", pick(cfg, "computer_collect_interval", "—") + " 秒");
-    setText("cfg-timeout", pick(cfg, "phone_timeout_seconds", "—") + " 秒");
+    setText("cfg-interval", pick(cfg, "computer_collect_interval", "—") + " 毫秒");
+    setText("cfg-timeout", pick(cfg, "phone_timeout_ms", "—") + " 毫秒");
     setText("cfg-auth", pick(cfg, "auth_enabled") ? "已启用" : "未启用");
 
     // 填充设置表单
-    document.getElementById("cfg-edit-interval").value = pick(cfg, "computer_collect_interval", 5);
-    document.getElementById("cfg-edit-timeout").value = pick(cfg, "phone_timeout_seconds", 90);
+    document.getElementById("cfg-edit-interval").value = pick(cfg, "computer_collect_interval", 5000);
+    document.getElementById("cfg-edit-timeout").value = pick(cfg, "phone_timeout_ms", 90000);
     document.getElementById("cfg-edit-token").value = pick(cfg, "shared_token", "");
-    document.getElementById("cfg-edit-poll").value = pick(cfg, "poll_interval", 5);
+    document.getElementById("cfg-edit-poll").value = pick(cfg, "poll_interval", 5000);
 
-    // 更新轮询间隔
-    var newInterval = (pick(cfg, "poll_interval", 5)) * 1000;
+    // 更新轮询间隔（poll_interval 已为毫秒，无需转换）
+    var newInterval = pick(cfg, "poll_interval", 5000);
     if (pollLogsTimer) clearInterval(pollLogsTimer);
     pollLogsTimer = setInterval(pollLogs, newInterval);
   }
@@ -212,10 +248,10 @@
   document.getElementById("settings-save").addEventListener("click", async function () {
     var msg = document.getElementById("settings-msg");
     var body = {
-      computer_collect_interval: parseInt(document.getElementById("cfg-edit-interval").value) || 5,
-      phone_timeout_seconds: parseInt(document.getElementById("cfg-edit-timeout").value) || 90,
+      computer_collect_interval: parseInt(document.getElementById("cfg-edit-interval").value) || 5000,
+      phone_timeout_ms: parseInt(document.getElementById("cfg-edit-timeout").value) || 90000,
       shared_token: document.getElementById("cfg-edit-token").value.trim(),
-      poll_interval: parseInt(document.getElementById("cfg-edit-poll").value) || 5,
+      poll_interval: parseInt(document.getElementById("cfg-edit-poll").value) || 5000,
     };
     try {
       var resp = await fetch("/api/config", {

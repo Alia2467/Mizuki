@@ -44,8 +44,8 @@ class SourceConfig(PluginConfigBase):
 
     data_url: str = Field(default="http://localhost:821/merged-data", description="电脑端合并数据接口地址")
     token: str = Field(default="", description="共享鉴权 token（与控制台 config.json 的 shared_token 一致；控制台未启用鉴权时留空）")
-    fetch_interval: int = Field(default=15, ge=5, description="数据拉取间隔（秒）")
-    request_timeout: int = Field(default=10, ge=3, description="单次请求超时（秒）")
+    fetch_interval: int = Field(default=15000, ge=300, description="数据拉取间隔（毫秒）")
+    request_timeout: int = Field(default=10000, ge=300, description="单次请求超时（毫秒）")
 
 
 class TargetConfig(PluginConfigBase):
@@ -69,7 +69,7 @@ class ProactiveConfig(PluginConfigBase):
     __ui_order__ = 3
 
     enabled: bool = Field(default=True, description="是否启用主动说话")
-    cooldown_seconds: int = Field(default=1800, ge=60, description="同一触发条件的冷却时间（秒）")
+    cooldown_ms: int = Field(default=1800000, ge=60000, description="同一触发条件的冷却时间（毫秒）")
     quiet_when_navigating: bool = Field(default=True, description="导航中保持安静（不说话）")
     quiet_when_calling: bool = Field(default=True, description="通话中保持安静（不说话）")
 
@@ -203,7 +203,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
                 raise
             except Exception as exc:
                 self._get_logger().error("海月感知主循环异常: %s", exc)
-            await asyncio.sleep(max(5, int(self.config.source.fetch_interval)))
+            await asyncio.sleep(max(5, int(self.config.source.fetch_interval) / 1000))
 
     async def _tick(self) -> None:
         data = await self._fetch_data()
@@ -293,7 +293,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
         last = self._last_spoken.get(trigger_key)
         if last is None:
             return True
-        return time.time() - last >= self.config.proactive.cooldown_seconds
+        return time.time() - last >= self.config.proactive.cooldown_ms / 1000
 
     # ------------------------------------------------------------------
     # 数据拉取与聊天流解析
@@ -304,7 +304,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
         if self.config.source.token:
             headers[TOKEN_HEADER] = self.config.source.token
         try:
-            async with httpx.AsyncClient(timeout=self.config.source.request_timeout) as client:
+            async with httpx.AsyncClient(timeout=self.config.source.request_timeout / 1000) as client:
                 resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
                     self._get_logger().warning("拉取数据失败: HTTP %s", resp.status_code)

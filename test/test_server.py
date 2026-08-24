@@ -28,23 +28,23 @@ class TestConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["port"] == 821
-        assert body["computer_collect_interval"] == 5
-        assert body["phone_timeout_seconds"] == 90
-        assert body["poll_interval"] == 5
+        assert body["computer_collect_interval"] == 5000
+        assert body["phone_timeout_ms"] == 90000
+        assert body["poll_interval"] == 5000
         assert body["auth_enabled"] is False
 
     def test_patch_config_updates_interval(self, client):
-        resp = client.patch("/api/config", json={"computer_collect_interval": 10})
+        resp = client.patch("/api/config", json={"computer_collect_interval": 500})
         assert resp.status_code == 200
         assert "computer_collect_interval" in resp.json()["updated"]
         # 读回来确认
         body = client.get("/api/config").json()
-        assert body["computer_collect_interval"] == 10
+        assert body["computer_collect_interval"] == 500
 
     def test_patch_config_updates_timeout(self, client):
-        resp = client.patch("/api/config", json={"phone_timeout_seconds": 120})
+        resp = client.patch("/api/config", json={"phone_timeout_ms": 120000})
         assert resp.status_code == 200
-        assert client.get("/api/config").json()["phone_timeout_seconds"] == 120
+        assert client.get("/api/config").json()["phone_timeout_ms"] == 120000
 
     def test_patch_config_updates_token(self, client):
         resp = client.patch("/api/config", json={"shared_token": "abc123"})
@@ -54,21 +54,21 @@ class TestConfig:
         assert body["auth_enabled"] is True
 
     def test_patch_config_updates_poll_interval(self, client):
-        resp = client.patch("/api/config", json={"poll_interval": 3})
+        resp = client.patch("/api/config", json={"poll_interval": 500})
         assert resp.status_code == 200
-        assert client.get("/api/config").json()["poll_interval"] == 3
+        assert client.get("/api/config").json()["poll_interval"] == 500
 
     def test_patch_config_clamps_minimum(self, client):
         resp = client.patch("/api/config", json={"computer_collect_interval": 0})
         assert resp.status_code == 200
-        assert client.get("/api/config").json()["computer_collect_interval"] == 1
+        assert client.get("/api/config").json()["computer_collect_interval"] == 300
 
     def test_patch_config_persists(self, client, tmp_path):
-        client.patch("/api/config", json={"phone_timeout_seconds": 200})
+        client.patch("/api/config", json={"phone_timeout_ms": 200000})
         cfg_file = tmp_path / "config.json"
         assert cfg_file.exists()
         saved = json.loads(cfg_file.read_text(encoding="utf-8"))
-        assert saved["phone_timeout_seconds"] == 200
+        assert saved["phone_timeout_ms"] == 200000
 
 
 # ── /api/state ─────────────────────────────────────────────────────────

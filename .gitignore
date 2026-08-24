@@ -9,6 +9,7 @@ data/
 
 # 构建产物走 Release/ 本地归档分发，不入库
 Release/
+dist/
 *.apk
 *.exe
 *.aab

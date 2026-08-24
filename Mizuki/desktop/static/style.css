@@ -262,6 +262,142 @@ html.dark body::before {
   color: var(--off);
 }
 
+/* ---------- 系统硬件：可视化进度条 ---------- */
+.gauges {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gauge-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gauge-label {
+  font-size: clamp(12px, 0.85vw, 14px);
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.gauge-pct {
+  font-size: clamp(13px, 0.95vw, 15px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.gauge-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--log-bg);
+  overflow: hidden;
+}
+
+.gauge-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  transition: width 0.5s ease, background-color 0.3s ease;
+  background: var(--ok);
+}
+
+.gauge-fill.mid {
+  background: var(--warn);
+}
+
+.gauge-fill.high {
+  background: var(--off);
+}
+
+/* ---------- 系统硬件：仪表盘 ---------- */
+.hardware-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.hw-gauge {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.hw-ring {
+  width: 90px;
+  height: 90px;
+  transform: rotate(-90deg);
+}
+
+.hw-ring-bg {
+  fill: none;
+  stroke: var(--log-bg);
+  stroke-width: 8;
+}
+
+.hw-ring-fill {
+  fill: none;
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-dasharray: 264;
+  stroke-dashoffset: 264;
+  transition: stroke-dashoffset 0.5s ease, stroke 0.3s ease;
+}
+
+.hw-ring-cpu { stroke: var(--accent); }
+.hw-ring-mem { stroke: var(--ok); }
+.hw-ring-disk { stroke: var(--warn); }
+
+.hw-ring-fill.mid { opacity: 0.8; }
+.hw-ring-fill.high { stroke: var(--off) !important; }
+
+.hw-gauge-center {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.hw-gauge-center small {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.hw-gauge-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: center;
+}
+
+.hw-sub {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
 /* ---------- 底部：服务 + 最近上报 ---------- */
 .bottom {
   display: grid;
@@ -295,6 +431,18 @@ html.dark body::before {
   margin: 0;
   font-size: clamp(13px, 1vw, 16px);
   font-weight: 650;
+}
+
+.logs--full {
+  margin-top: 1.2%;
+  width: 100%;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px 20px;
+  backdrop-filter: blur(var(--blur));
+  -webkit-backdrop-filter: blur(var(--blur));
 }
 
 .logs-body {
@@ -375,6 +523,17 @@ html.dark body::before {
 /* ---------- 设置面板 ---------- */
 .settings-card {
   margin-bottom: 1.5vh;
+}
+
+/* 隐藏数字输入框的加减按钮 */
+.settings-form input[type="number"]::-webkit-inner-spin-button,
+.settings-form input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.settings-form input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
 }
 
 .settings-form {
@@ -519,6 +678,9 @@ html.dark body::before {
   }
   .bottom {
     grid-template-columns: 1fr 1.4fr;
+  }
+  .hardware-grid {
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 

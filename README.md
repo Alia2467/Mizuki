@@ -78,9 +78,9 @@ python server.py        # 纯服务；python app.py 为桌面窗口入口
 |------|------|
 | `host` | 监听地址，默认 `0.0.0.0` |
 | `port` | 服务端口，默认 `821`（三端共识值） |
-| `computer_collect_interval` | 电脑状态采集间隔（秒），默认 `5` |
-| `phone_timeout_seconds` | 超过该时长未上报视为手机离线，默认 `90` |
-| `poll_interval` | WebUI 仪表盘轮询间隔（秒），默认 `5` |
+| `computer_collect_interval` | 电脑状态采集间隔（毫秒），默认 `5000` |
+| `phone_timeout_ms` | 超过该时长未上报视为手机离线（毫秒），默认 `90000` |
+| `poll_interval` | WebUI 仪表盘轮询间隔（毫秒），默认 `5000` |
 | `shared_token` | 共享鉴权令牌，空串 = 不启用鉴权的兼容模式 |
 
 **插件** `config.toml`（六分节，关键可选项）：
@@ -89,9 +89,9 @@ python server.py        # 纯服务；python app.py 为桌面窗口入口
 |------|------|
 | `source.data_url` | 电脑端合并数据接口，默认 `http://localhost:821/merged-data` |
 | `source.token` | 与控制台 `shared_token` 一致的令牌；控制台未启用鉴权时留空 |
-| `source.fetch_interval` | 数据拉取间隔（秒），默认 `15` |
+| `source.fetch_interval` | 数据拉取间隔（毫秒），默认 `15000` |
 | `target.platform` / `chat_type` / `user_id` | 主动说话目标聊天流（默认 QQ 私聊） |
-| `proactive.cooldown_seconds` | 同一触发条件的冷却时间，默认 `1800` |
+| `proactive.cooldown_ms` | 同一触发条件的冷却时间（毫秒），默认 `1800000` |
 | `proactive.quiet_when_navigating` / `quiet_when_calling` | 导航中/通话中安静模式，默认开启 |
 | `rules.nav_end_enabled` | 导航结束问候开关（状态翻转检测，不进规则表） |
 | `rules.table` | 声明式规则表：心率 ≥100 / 步数 ≥10000 / 降雨（受控词表）/ 高温 ≥35 ℃，逐条 `enabled` 开关与阈值 |

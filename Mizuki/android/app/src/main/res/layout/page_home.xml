@@ -15,57 +15,31 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- 顶栏：汉堡 + 搜索框 + 分享，下面一条分割线 -->
+            <!-- 顶栏：品牌名（居中） -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical">
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:paddingVertical="8dp">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
+                <TextView
+                    android:id="@+id/brandText"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <ImageButton
-                        android:id="@+id/menuButton"
-                        android:layout_width="44dp"
-                        android:layout_height="44dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="@string/user_guide"
-                        android:src="@drawable/ic_menu" />
-
-                    <EditText
-                        android:id="@+id/searchBox"
-                        android:layout_width="0dp"
-                        android:layout_height="44dp"
-                        android:layout_weight="1"
-                        android:background="@drawable/bg_button"
-                        android:hint="搜索"
-                        android:imeOptions="actionSearch"
-                        android:inputType="text"
-                        android:paddingHorizontal="14dp"
-                        android:singleLine="true"
-                        android:textColor="@color/text_primary"
-                        android:textColorHint="@color/text_secondary" />
-
-                    <ImageButton
-                        android:id="@+id/shareButton"
-                        android:layout_width="44dp"
-                        android:layout_height="44dp"
-                        android:background="?attr/selectableItemBackgroundBorderless"
-                        android:contentDescription="分享"
-                        android:src="@drawable/ic_share" />
-                </LinearLayout>
-
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:layout_marginTop="4dp"
-                    android:background="@color/divider" />
+                    android:text="@string/brand_name"
+                    android:textColor="@color/text_primary"
+                    android:textSize="22sp"
+                    android:textStyle="bold" />
             </LinearLayout>
 
-            <!-- 横幅，圆角、保持原比例 -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="4dp"
+                android:background="@color/divider" />
+
+            <!-- 横幅（不可更换） -->
             <com.google.android.material.imageview.ShapeableImageView
                 android:id="@+id/bannerImage"
                 android:layout_width="match_parent"
@@ -76,67 +50,37 @@
                 android:src="@drawable/home_banner"
                 app:shapeAppearanceOverlay="@style/RoundedImage" />
 
-            <!-- 自定义文字（点按修改） -->
-            <TextView
-                android:id="@+id/brandText"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center_horizontal"
-                android:layout_marginTop="10dp"
-                android:text="@string/brand_name"
-                android:textColor="@color/text_primary"
-                android:textSize="18sp"
-                android:textStyle="bold" />
-
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:layout_marginTop="16dp"
                 android:background="@color/divider" />
 
-            <!-- 连接状态框 -->
-            <TextView
-                android:id="@+id/statusBox"
+            <!-- 状态灯（居中） -->
+            <LinearLayout
+                android:id="@+id/statusLight"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:background="@drawable/bg_box"
                 android:gravity="center"
-                android:padding="18dp"
-                android:text="@string/status_not_connected"
-                android:textColor="@color/text_primary"
-                android:textSize="16sp" />
+                android:orientation="horizontal"
+                android:padding="18dp">
 
-            <!-- 开始连接 / 断开连接 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:orientation="horizontal">
+                <View
+                    android:id="@+id/statusDot"
+                    android:layout_width="14dp"
+                    android:layout_height="14dp"
+                    android:background="@drawable/status_dot_off" />
 
                 <TextView
-                    android:id="@+id/startButton"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_weight="1"
-                    android:layout_marginEnd="6dp"
-                    android:background="@drawable/bg_button"
-                    android:gravity="center"
-                    android:text="@string/start_connect"
+                    android:id="@+id/statusText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="@string/status_not_connected"
                     android:textColor="@color/text_primary"
-                    android:textSize="15sp" />
-
-                <TextView
-                    android:id="@+id/disconnectButton"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_weight="1"
-                    android:layout_marginStart="6dp"
-                    android:background="@drawable/bg_button"
-                    android:gravity="center"
-                    android:text="@string/disconnect"
-                    android:textColor="@color/text_primary"
-                    android:textSize="15sp" />
+                    android:textSize="18sp" />
             </LinearLayout>
 
             <View
@@ -155,38 +99,38 @@
                 <TextView
                     android:id="@+id/locationButton"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="56dp"
                     android:layout_weight="1"
                     android:layout_marginEnd="6dp"
                     android:background="@drawable/bg_button"
                     android:gravity="center"
                     android:text="@string/location"
                     android:textColor="@color/text_primary"
-                    android:textSize="14sp" />
+                    android:textSize="16sp" />
 
                 <TextView
                     android:id="@+id/weatherButton"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="56dp"
                     android:layout_weight="1"
                     android:layout_marginHorizontal="6dp"
                     android:background="@drawable/bg_button"
                     android:gravity="center"
                     android:text="@string/weather"
                     android:textColor="@color/text_primary"
-                    android:textSize="14sp" />
+                    android:textSize="16sp" />
 
                 <TextView
                     android:id="@+id/deviceButton"
                     android:layout_width="0dp"
-                    android:layout_height="44dp"
+                    android:layout_height="56dp"
                     android:layout_weight="1"
                     android:layout_marginStart="6dp"
                     android:background="@drawable/bg_button"
                     android:gravity="center"
                     android:text="@string/device"
                     android:textColor="@color/text_primary"
-                    android:textSize="14sp" />
+                    android:textSize="16sp" />
             </LinearLayout>
         </LinearLayout>
     </ScrollView>

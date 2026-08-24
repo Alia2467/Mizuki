@@ -24,6 +24,11 @@ try:
 except ImportError:  # pragma: no cover - 非 Windows 环境
     win32gui = None
 
+try:
+    import win32process
+except ImportError:  # pragma: no cover - 非 Windows 环境
+    win32process = None
+
 # 游戏进程关键词（小写匹配）
 GAME_KEYWORDS: tuple[str, ...] = (
     "steam",
@@ -70,7 +75,7 @@ class ComputerCollector:
         try:
             hwnd = win32gui.GetForegroundWindow()
             title = win32gui.GetWindowText(hwnd)
-            _, pid = win32gui.GetWindowThreadProcessId(hwnd)
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
             process_name = ""
             if psutil is not None:
                 try:
@@ -89,13 +94,63 @@ class ComputerCollector:
     def snapshot(self) -> dict[str, Any]:
         """采集一次当前电脑状态。"""
         title, process = self._active_window()
-        return {
+        data = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "foreground_window": title,
             "foreground_process": process,
             "is_gaming": self._contains_any(process, GAME_KEYWORDS),
             "is_navigating": self._contains_any(title, NAVIGATION_KEYWORDS),
+            "local_ip": self._local_ip(),
         }
+        data.update(self._snapshot_hardware())
+        return data
+
+    @staticmethod
+    def _local_ip() -> str:
+        """获取本机局域网 IP（UDP 探测法，取实际出站的接口地址）。"""
+        import socket
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+        except Exception:
+            return "127.0.0.1"
+
+    @staticmethod
+    def _snapshot_hardware() -> dict[str, Any]:
+        """采集硬件占用指标（CPU / 内存 / 磁盘），psutil 不可用时返回占位值。"""
+        if psutil is None:
+            return {
+                "cpu_percent": 0,
+                "memory_percent": 0,
+                "memory_used_gb": 0.0,
+                "memory_total_gb": 0.0,
+                "disk_percent": 0,
+                "disk_used_gb": 0.0,
+                "disk_total_gb": 0.0,
+            }
+        try:
+            mem = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            return {
+                "cpu_percent": int(psutil.cpu_percent(interval=None)),
+                "memory_percent": int(mem.percent),
+                "memory_used_gb": round(mem.used / (1024 ** 3), 1),
+                "memory_total_gb": round(mem.total / (1024 ** 3), 1),
+                "disk_percent": int(disk.percent),
+                "disk_used_gb": round(disk.used / (1024 ** 3), 1),
+                "disk_total_gb": round(disk.total / (1024 ** 3), 1),
+            }
+        except Exception:
+            return {
+                "cpu_percent": 0,
+                "memory_percent": 0,
+                "memory_used_gb": 0.0,
+                "memory_total_gb": 0.0,
+                "disk_percent": 0,
+                "disk_used_gb": 0.0,
+                "disk_total_gb": 0.0,
+            }
 
     # ------------------------------------------------------------------
     # 后台线程

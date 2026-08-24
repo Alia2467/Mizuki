@@ -9,6 +9,7 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -76,7 +77,7 @@ class SensorService : Service(), SensorEventListener {
 
     private var targetUrl = ""
     private var authToken = ""
-    private var intervalSeconds = 30
+    private var intervalMs = 10000
     private var stepBaseline = -1L
     private var lastSteps = 0L
 
@@ -101,7 +102,7 @@ class SensorService : Service(), SensorEventListener {
     private val collectRunnable = object : Runnable {
         override fun run() {
             collectAndSend()
-            handler.postDelayed(this, intervalSeconds * 1000L)
+            handler.postDelayed(this, intervalMs.toLong())
         }
     }
 
@@ -119,10 +120,10 @@ class SensorService : Service(), SensorEventListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val ip = intent?.getStringExtra(EXTRA_IP) ?: DEFAULT_IP
         val port = intent?.getIntExtra(EXTRA_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
-        intervalSeconds = (intent?.getIntExtra(EXTRA_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL).coerceAtLeast(10)
+        intervalMs = (intent?.getIntExtra(EXTRA_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL).coerceAtLeast(300)
         authToken = intent?.getStringExtra(EXTRA_TOKEN) ?: ""
         targetUrl = "http://$ip:$port/phone-data"
-        Log.i(TAG, "开始采集 → $targetUrl，间隔 ${intervalSeconds}s")
+        Log.i(TAG, "开始采集 → $targetUrl，间隔 ${intervalMs}ms")
 
         handler.removeCallbacks(collectRunnable)
         handler.post(collectRunnable)
@@ -131,11 +132,16 @@ class SensorService : Service(), SensorEventListener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private var consecutiveFailures = 0
+
     override fun onDestroy() {
         handler.removeCallbacks(collectRunnable)
         stepCounter?.let { sensorManager.unregisterListener(this) }
         executor.shutdown()
         instance = null
+        // 服务销毁时同步状态，确保 UI 不残留「已连接」（异常中断场景）
+        getSharedPreferences("mizuki", Context.MODE_PRIVATE)
+            .edit().putBoolean("service_running", false).apply()
         super.onDestroy()
     }
 
@@ -169,7 +175,22 @@ class SensorService : Service(), SensorEventListener {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()
-        startForeground(NOTIFICATION_ID, notification)
+
+        // Android 14+（API 34）要求 startForeground 显式指定前台服务类型，否则抛 MissingForegroundServiceTypeException；
+        // 权限未授予时抛 SecurityException，必须兜底，遵循「降级胜于中断」。
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
+                        ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "前台服务启动失败（权限未授予）: ${e.message}")
+        }
     }
 
     // ------------------------------------------------------------------
@@ -302,18 +323,35 @@ class SensorService : Service(), SensorEventListener {
                 sendFailed++
                 lastError = e.message ?: "连接失败"
                 Log.e(TAG, "上报失败: $lastError")
-                pendingStore.enqueue(json)   // 离线补传：暂存待恢复后重发
+                consecutiveFailures++
+                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                    Log.e(TAG, "连续失败 $consecutiveFailures 次，自动停服")
+                    stopSelf()
+                } else {
+                    pendingStore.enqueue(json)
+                }
             }
 
             override fun onResponse(call: Call, response: Response) {
                 if (response.isSuccessful) {
                     sendSuccess++
+                    consecutiveFailures = 0
                     Log.d(TAG, "上报成功")
-                    sendPending()            // 上报成功后尝试补传队列
+                    sendPending()
                 } else {
                     sendFailed++
                     lastError = "HTTP ${response.code}"
                     Log.e(TAG, "上报失败: $lastError")
+                    if (isPermanentReject(response.code)) {
+                        // 永久拒收不累计失败次数（非网络问题）
+                        Log.e(TAG, "永久拒收，不累计连续失败")
+                    } else {
+                        consecutiveFailures++
+                        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                            Log.e(TAG, "连续失败 $consecutiveFailures 次，自动停服")
+                            stopSelf()
+                        }
+                    }
                     if (!isPermanentReject(response.code)) pendingStore.enqueue(json)
                 }
                 response.close()
@@ -694,10 +732,13 @@ class SensorService : Service(), SensorEventListener {
         /** 连接默认值：各页面占位/兜底的唯一数据源，禁止另处重复字面量。 */
         const val DEFAULT_IP = "192.168.1.4"
         const val DEFAULT_PORT = 821
-        const val DEFAULT_INTERVAL = 30
+        const val DEFAULT_INTERVAL = 300
 
         private const val NOTIFICATION_ID = 1
         private const val TAG = "MizukiSensor"
+
+        /** 连续失败达此次数后自动停服，避免无限空转（遵循「降级胜于中断」）。 */
+        private const val MAX_CONSECUTIVE_FAILURES = 5
 
         /** 最近一次采集到的完整数据（供状态页展示）。 */
         @Volatile

@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>海月感知 · 控制台</title>
+  <title>Mizuki · 控制台</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <link rel="icon" type="image/x-icon" href="/static/mizuki.ico" />
 </head>
 <body>
   <div class="page">
@@ -12,7 +13,7 @@
     <header class="topbar">
       <div class="brand">
         <div>
-          <h1 class="brand-title">海月之音</h1>
+          <h1 class="brand-title">海月感知</h1>
         </div>
       </div>
       <div class="topbar-right">
@@ -29,20 +30,20 @@
       </div>
       <div class="settings-form">
         <div class="field">
-          <label for="cfg-edit-interval">采集间隔（秒）</label>
-          <input type="number" id="cfg-edit-interval" min="1" max="300" />
+          <label for="cfg-edit-interval">采集间隔（毫秒）</label>
+          <input type="number" id="cfg-edit-interval" min="300" max="300000" step="100" />
         </div>
         <div class="field">
-          <label for="cfg-edit-timeout">离线判定（秒）</label>
-          <input type="number" id="cfg-edit-timeout" min="10" max="600" />
+          <label for="cfg-edit-timeout">离线判定（毫秒）</label>
+          <input type="number" id="cfg-edit-timeout" min="300" max="600000" step="1000" />
         </div>
         <div class="field">
           <label for="cfg-edit-token">鉴权 Token</label>
           <input type="text" id="cfg-edit-token" placeholder="留空则不启用鉴权" />
         </div>
         <div class="field">
-          <label for="cfg-edit-poll">上报间隔（秒）</label>
-          <input type="number" id="cfg-edit-poll" min="1" max="60" />
+          <label for="cfg-edit-poll">轮询间隔（毫秒）</label>
+          <input type="number" id="cfg-edit-poll" min="300" max="60000" step="100" />
         </div>
         <div class="settings-actions">
           <button class="btn-save" id="settings-save" type="button">保存</button>
@@ -53,6 +54,37 @@
 
     <!-- 卡片网格 -->
     <main class="grid">
+      <!-- 系统硬件（顶部全宽） -->
+      <section class="card card--span2" id="card-hardware">
+        <div class="card-head"><h2>🖥️ 系统硬件</h2></div>
+        <div class="hardware-grid">
+          <div class="hw-gauge">
+            <svg class="hw-ring" viewBox="0 0 100 100">
+              <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
+              <circle class="hw-ring-fill hw-ring-cpu" cx="50" cy="50" r="42" />
+            </svg>
+            <div class="hw-gauge-center"><span id="hw-cpu-pct">—</span><small>%</small></div>
+            <div class="hw-gauge-label">CPU</div>
+          </div>
+          <div class="hw-gauge">
+            <svg class="hw-ring" viewBox="0 0 100 100">
+              <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
+              <circle class="hw-ring-fill hw-ring-mem" cx="50" cy="50" r="42" />
+            </svg>
+            <div class="hw-gauge-center"><span id="hw-mem-pct">—</span><small>%</small></div>
+            <div class="hw-gauge-label">内存 <span id="hw-mem-sub" class="hw-sub">—</span></div>
+          </div>
+          <div class="hw-gauge">
+            <svg class="hw-ring" viewBox="0 0 100 100">
+              <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
+              <circle class="hw-ring-fill hw-ring-disk" cx="50" cy="50" r="42" />
+            </svg>
+            <div class="hw-gauge-center"><span id="hw-disk-pct">—</span><small>%</small></div>
+            <div class="hw-gauge-label">磁盘 <span id="hw-disk-sub" class="hw-sub">—</span></div>
+          </div>
+        </div>
+      </section>
+
       <!-- 手机状态（连接 + 使用合并） -->
       <section class="card card--span2" id="card-phone-conn">
         <div class="card-head">
@@ -68,21 +100,14 @@
         </div>
       </section>
 
-      <!-- 位置 -->
-      <section class="card">
-        <div class="card-head"><h2>📍 位置</h2></div>
+      <!-- 位置与天气 -->
+      <section class="card card--span2">
+        <div class="card-head"><h2>🌤 位置与天气</h2></div>
         <div class="kv">
           <div class="kv-row"><span class="kv-key">城市</span><span class="kv-val" id="loc-city">—</span></div>
           <div class="kv-row"><span class="kv-key">纬度</span><span class="kv-val" id="loc-lat">—</span></div>
           <div class="kv-row"><span class="kv-key">经度</span><span class="kv-val" id="loc-lng">—</span></div>
-        </div>
-      </section>
-
-      <!-- 天气 -->
-      <section class="card">
-        <div class="card-head"><h2>🌤 天气</h2></div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">状况</span><span class="kv-val" id="wth-condition">—</span></div>
+          <div class="kv-row"><span class="kv-key">天气状况</span><span class="kv-val" id="wth-condition">—</span></div>
           <div class="kv-row"><span class="kv-key">温度</span><span class="kv-val" id="wth-temp">—</span></div>
           <div class="kv-row"><span class="kv-key">湿度</span><span class="kv-val" id="wth-humidity">—</span></div>
         </div>
@@ -102,7 +127,7 @@
       </section>
 
       <!-- 健康 -->
-      <section class="card">
+      <section class="card card--span2">
         <div class="card-head"><h2>❤️ 健康</h2></div>
         <div class="kv">
           <div class="kv-row"><span class="kv-key">心率</span><span class="kv-val" id="hlt-heart">—</span></div>
@@ -115,38 +140,35 @@
       <section class="card">
         <div class="card-head"><h2>💻 电脑状态</h2></div>
         <div class="kv">
+          <div class="kv-row"><span class="kv-key">本地 IP</span><span class="kv-val" id="pc-ip">—</span></div>
           <div class="kv-row"><span class="kv-key">前台窗口</span><span class="kv-val" id="pc-window">—</span></div>
           <div class="kv-row"><span class="kv-key">进程</span><span class="kv-val" id="pc-process">—</span></div>
           <div class="kv-row"><span class="kv-key">状态</span><span class="kv-val" id="pc-flags">—</span></div>
         </div>
       </section>
-    </main>
 
-    <!-- 服务 + 最近上报（并排） -->
-    <div class="bottom">
+      <!-- 关于 -->
       <section class="card">
-        <div class="card-head"><h2>🖥 服务</h2></div>
+        <div class="card-head"><h2>ℹ️ 关于</h2></div>
         <div class="kv">
           <div class="kv-row"><span class="kv-key">版本</span><span class="kv-val" id="srv-version">—</span></div>
           <div class="kv-row"><span class="kv-key">已运行</span><span class="kv-val" id="srv-uptime">—</span></div>
           <div class="kv-row"><span class="kv-key">端口</span><span class="kv-val" id="cfg-port">—</span></div>
-          <div class="kv-row"><span class="kv-key">采集间隔</span><span class="kv-val" id="cfg-interval">—</span></div>
-          <div class="kv-row"><span class="kv-key">离线判定</span><span class="kv-val" id="cfg-timeout">—</span></div>
-          <div class="kv-row"><span class="kv-key">鉴权</span><span class="kv-val" id="cfg-auth">—</span></div>
           <div class="kv-row"><span class="kv-key">最后刷新</span><span class="kv-val" id="srv-refresh">—</span></div>
         </div>
       </section>
+    </main>
 
-      <section class="logs">
-        <div class="logs-head">
-          <h2>📋 最近上报</h2>
-          <span class="tag" id="logs-count">0 条</span>
-        </div>
-        <div class="logs-body" id="logs-body">
-          <div class="logs-empty">暂无记录</div>
-        </div>
-      </section>
-    </div>
+    <!-- 上传日志（全宽） -->
+    <section class="logs logs--full">
+      <div class="logs-head">
+        <h2>📋 上传日志</h2>
+        <span class="tag" id="logs-count">0 条</span>
+      </div>
+      <div class="logs-body" id="logs-body">
+        <div class="logs-empty">暂无记录</div>
+      </div>
+    </section>
 
 
   </div>

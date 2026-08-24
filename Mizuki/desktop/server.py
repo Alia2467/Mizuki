@@ -86,9 +86,9 @@ DATA_FILE = app_dir() / "data" / "collected.jsonl"
 DEFAULT_CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
     "port": 821,
-    "computer_collect_interval": 5,  # 电脑状态采集间隔（秒）
-    "phone_timeout_seconds": 90,  # 超过该时长未上报视为手机离线（秒）
-    "poll_interval": 5,  # WebUI 刷新间隔（秒）
+    "computer_collect_interval": 5000,  # 电脑状态采集间隔（毫秒）
+    "phone_timeout_ms": 90000,  # 超过该时长未上报视为手机离线（毫秒）
+    "poll_interval": 5000,  # WebUI 仪表盘轮询间隔（毫秒）
     "shared_token": "",  # 共享鉴权 token；空串表示不启用鉴权（兼容模式）
 }
 
@@ -174,7 +174,7 @@ def save_config() -> None:
 
 
 config = load_config()
-collector = ComputerCollector(interval=config["computer_collect_interval"])
+collector = ComputerCollector(interval=config["computer_collect_interval"] / 1000)
 storage = DataCollector(data_file=DATA_FILE)  # 收集装置：队列 + 专用写盘线程，与主服务解耦
 
 
@@ -224,7 +224,7 @@ def _computer_persistence_loop() -> None:
         except Exception as exc:
             print(f"[电脑状态采集] 异常: {exc}")
         # 间隔唯一数据源是 config；落盘比对与采集器共用同一配置项
-        time.sleep(config["computer_collect_interval"])
+        time.sleep(config["computer_collect_interval"] / 1000)
 
 
 def _phone_is_online() -> bool:
@@ -233,7 +233,7 @@ def _phone_is_online() -> bool:
         received_at = _phone_received_at
     if received_at is None:
         return False
-    return (datetime.now() - received_at).total_seconds() <= config["phone_timeout_seconds"]
+    return (datetime.now() - received_at).total_seconds() * 1000 <= config["phone_timeout_ms"]
 
 
 def _build_state() -> dict[str, Any]:
@@ -325,7 +325,7 @@ async def api_config() -> JSONResponse:
         "host": config["host"],
         "port": config["port"],
         "computer_collect_interval": config["computer_collect_interval"],
-        "phone_timeout_seconds": config["phone_timeout_seconds"],
+        "phone_timeout_ms": config["phone_timeout_ms"],
         "poll_interval": config.get("poll_interval", 5),
         "shared_token": config["shared_token"],
         "auth_enabled": _auth_enabled(),
@@ -337,17 +337,17 @@ async def api_config() -> JSONResponse:
 async def api_config_update(request: Request) -> JSONResponse:
     """更新配置并持久化到 config.json。"""
     body = await request.json()
-    allowed = {"computer_collect_interval", "phone_timeout_seconds", "shared_token", "poll_interval"}
+    allowed = {"computer_collect_interval", "phone_timeout_ms", "shared_token", "poll_interval"}
     updated = []
     for key in allowed:
         if key in body:
             val = body[key]
-            if key in ("computer_collect_interval", "phone_timeout_seconds", "poll_interval"):
-                val = max(1, int(val))
+            if key in ("computer_collect_interval", "phone_timeout_ms", "poll_interval"):
+                val = max(300, int(val))
             config[key] = val
             updated.append(key)
     if "computer_collect_interval" in updated:
-        collector.interval = config["computer_collect_interval"]
+        collector.interval = config["computer_collect_interval"] / 1000
     save_config()
     return JSONResponse({"status": "ok", "updated": updated})
 

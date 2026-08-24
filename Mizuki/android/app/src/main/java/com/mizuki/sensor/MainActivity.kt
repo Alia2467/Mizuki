@@ -15,32 +15,28 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.view.GravityCompat
-import androidx.drawerlayout.widget.DrawerLayout
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
-import android.net.Uri
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 
-/** 主页：首页 / 状态 / 设置三页签 + 侧边栏；连接配置、权限引导与实时状态展示。 */
+/** 主页：首页 / 状态 / 设置三页签；连接配置、权限引导与实时状态展示。 */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var drawerLayout: DrawerLayout
     private lateinit var pageHome: View
     private lateinit var pageStatus: View
     private lateinit var pageSettings: View
     private lateinit var tabHome: TextView
     private lateinit var tabStatus: TextView
     private lateinit var tabSettings: TextView
-    private lateinit var statusBox: TextView
+    private lateinit var statusLight: View
+    private lateinit var statusDot: View
+    private lateinit var statusText: TextView
     private lateinit var ipEdit: EditText
     private lateinit var portEdit: EditText
     private lateinit var intervalEdit: EditText
@@ -68,22 +64,8 @@ class MainActivity : AppCompatActivity() {
     private val healthPermissionLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) {
-        // 授权流程走完就记一个标记，之后不再反复弹
         prefs.edit().putBoolean("health_perm_asked", true).apply()
         startCollectFromEdits()
-    }
-
-    // 首页横幅：从相册选图
-    private val bannerPicker = registerForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: Exception) {}
-            prefs.edit().putString("banner_uri", uri.toString()).apply()
-            loadBannerImage()
-        }
     }
 
     private val statusRunnable = object : Runnable {
@@ -97,20 +79,15 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        drawerLayout = findViewById(R.id.drawer_layout)
-
-        val drawer = findViewById<View>(R.id.drawer)
-        val drawerLp = drawer.layoutParams as DrawerLayout.LayoutParams
-        drawerLp.width = resources.displayMetrics.widthPixels * 30 / 100
-        drawer.layoutParams = drawerLp
-
         pageHome = findViewById(R.id.page_home)
         pageStatus = findViewById(R.id.page_status)
         pageSettings = findViewById(R.id.page_settings)
         tabHome = findViewById(R.id.tab_home)
         tabStatus = findViewById(R.id.tab_status)
         tabSettings = findViewById(R.id.tab_settings)
-        statusBox = findViewById(R.id.statusBox)
+        statusLight = findViewById(R.id.statusLight)
+        statusDot = findViewById(R.id.statusDot)
+        statusText = findViewById(R.id.statusText)
         ipEdit = findViewById(R.id.ipEdit)
         portEdit = findViewById(R.id.portEdit)
         intervalEdit = findViewById(R.id.intervalEdit)
@@ -123,70 +100,28 @@ class MainActivity : AppCompatActivity() {
         statusSleep = findViewById(R.id.statusSleep)
         statusMusic = findViewById(R.id.statusMusic)
         statusApp = findViewById(R.id.statusApp)
-        // page_status 的根是 SwipeRefreshLayout，被 include 的 id 覆盖成了 page_status
         swipeRefresh = findViewById(R.id.page_status) as SwipeRefreshLayout
 
         loadPrefs()
-        applySavedLanguage()
 
-        findViewById<com.google.android.material.imageview.ShapeableImageView>(R.id.bannerImage)
-            .setOnClickListener {
-                bannerPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            }
-        loadBannerImage()
-        setupBrandText()
-
-        findViewById<View>(R.id.menuButton).setOnClickListener {
-            drawerLayout.openDrawer(GravityCompat.START)
-        }
-
-        val searchBox = findViewById<EditText>(R.id.searchBox)
-        searchBox.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) {
-                val query = searchBox.text.toString().trim()
-                startActivity(Intent(this, SearchActivity::class.java).putExtra("query", query))
-                true
-            } else {
-                false
-            }
-        }
-
-        findViewById<View>(R.id.shareButton).setOnClickListener {
-            val share = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_TEXT, "海月感知（Mizuki） - 手机端数据采集 APP")
-            }
-            startActivity(Intent.createChooser(share, "分享"))
-        }
-
-        findViewById<View>(R.id.menu_guide).setOnClickListener {
-            drawerLayout.closeDrawer(GravityCompat.START)
-            startActivity(Intent(this, GuideActivity::class.java))
-        }
-        findViewById<View>(R.id.menu_about).setOnClickListener {
-            drawerLayout.closeDrawer(GravityCompat.START)
-            startActivity(Intent(this, AboutActivity::class.java))
-        }
-
-        findViewById<View>(R.id.menu_note).setOnClickListener {
-            drawerLayout.closeDrawer(GravityCompat.START)
-            startActivity(Intent(this, NoteActivity::class.java))
-        }
-        findViewById<View>(R.id.menu_personalize).setOnClickListener {
-            drawerLayout.closeDrawer(GravityCompat.START)
-            startActivity(Intent(this, PersonalizeActivity::class.java))
-        }
-
-        findViewById<View>(R.id.themeToggle).setOnClickListener {
-            val night = AppCompatDelegate.getDefaultNightMode() == AppCompatDelegate.MODE_NIGHT_YES
+        // 夜间模式开关
+        val themeSwitch = findViewById<SwitchCompat>(R.id.themeSwitch)
+        themeSwitch.isChecked = AppCompatDelegate.getDefaultNightMode() == AppCompatDelegate.MODE_NIGHT_YES
+        themeSwitch.setOnCheckedChangeListener { _, isChecked ->
             AppCompatDelegate.setDefaultNightMode(
-                if (night) AppCompatDelegate.MODE_NIGHT_NO else AppCompatDelegate.MODE_NIGHT_YES
+                if (isChecked) AppCompatDelegate.MODE_NIGHT_YES else AppCompatDelegate.MODE_NIGHT_NO
             )
-            drawerLayout.closeDrawer(GravityCompat.START)
         }
 
-        findViewById<View>(R.id.startButton).setOnClickListener { onStartConnect() }
-        findViewById<View>(R.id.disconnectButton).setOnClickListener { onDisconnect() }
+        // 状态灯：点击切换连接
+        statusLight.setOnClickListener {
+            val connected = prefs.getBoolean("service_running", false)
+            if (connected) {
+                onDisconnect()
+            } else {
+                onStartConnect()
+            }
+        }
 
         findViewById<View>(R.id.locationButton).setOnClickListener { openMap() }
         findViewById<View>(R.id.weatherButton).setOnClickListener {
@@ -213,14 +148,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.usageAccessButton).setOnClickListener { openUsageAccessSettings() }
         findViewById<View>(R.id.healthSyncButton).setOnClickListener { requestHealthSync() }
 
-        findViewById<View>(R.id.languageHeader).setOnClickListener {
-            val group = findViewById<View>(R.id.languageGroup)
-            group.visibility = if (group.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-        }
-        findViewById<View>(R.id.langZh).setOnClickListener { setLanguage("zh") }
-        findViewById<View>(R.id.langEn).setOnClickListener { setLanguage("en") }
-        findViewById<View>(R.id.langJa).setOnClickListener { setLanguage("ja") }
-
         // 主题色：只作用于按键
         applyThemeToButtons()
 
@@ -237,7 +164,7 @@ class MainActivity : AppCompatActivity() {
             SensorService.requestRefresh()
             statusHandler.postDelayed({
                 updateStatusPage()
-                applyStatusBox()
+                applyStatusLight()
                 homeRefresh.isRefreshing = false
             }, 1500)
         }
@@ -253,10 +180,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 从个性设置等页面返回后，立即重新套用字体、主题色与连接状态框
         FontManager.applyTo(this)
         applyThemeToButtons()
-        applyStatusBox()
+        applyStatusLight()
     }
 
     private fun loadPrefs() {
@@ -309,8 +235,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestHealthPermissions() {
-        // 已放弃从 Health Connect 读心率/睡眠（手表无法同步到 Health Connect），
-        // 步数走手机计步传感器，连接时不再弹健康授权。
         startCollectFromEdits()
     }
 
@@ -339,88 +263,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun setStatus(connected: Boolean) {
         prefs.edit().putBoolean("service_running", connected).apply()
-        applyStatusBox()
+        applyStatusLight()
     }
 
-    private fun applyStatusBox() {
+    private fun applyStatusLight() {
         val connected = prefs.getBoolean("service_running", false)
         if (connected) {
-            statusBox.text = getString(R.string.status_connected)
-            statusBox.background = ThemeUtils.buttonDrawable(this)
-            statusBox.setTextColor(ThemeUtils.contrastTextColor(ThemeUtils.accentColor(this)))
+            statusDot.setBackgroundResource(R.drawable.status_dot_on)
+            statusText.text = getString(R.string.status_connected)
         } else {
-            statusBox.text = getString(R.string.status_not_connected)
-            statusBox.setBackgroundResource(R.drawable.bg_box)
-            statusBox.setTextColor(ContextCompat.getColor(this, R.color.text_primary))
+            statusDot.setBackgroundResource(R.drawable.status_dot_off)
+            statusText.text = getString(R.string.status_not_connected)
         }
     }
 
-    private fun applySavedLanguage() {
-        val lang = prefs.getString("lang", "zh") ?: "zh"
-        val locale = when (lang) {
-            "en" -> java.util.Locale.ENGLISH
-            "ja" -> java.util.Locale.JAPANESE
-            else -> java.util.Locale.SIMPLIFIED_CHINESE
-        }
-        AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.create(locale))
-    }
-
-    private fun setLanguage(code: String) {
-        prefs.edit().putString("lang", code).apply()
-        val locale = when (code) {
-            "en" -> java.util.Locale.ENGLISH
-            "ja" -> java.util.Locale.JAPANESE
-            else -> java.util.Locale.SIMPLIFIED_CHINESE
-        }
-        AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.create(locale))
-    }
-
-    /** 主题色只作用于按键：首页按钮 + 设置页操作/语言按钮 + 侧边栏相框。 */
+    /** 主题色只作用于按键。 */
     private fun applyThemeToButtons() {
         ThemeUtils.styleButtons(
             this,
-            findViewById(R.id.startButton),
-            findViewById(R.id.disconnectButton),
             findViewById(R.id.locationButton),
             findViewById(R.id.weatherButton),
             findViewById(R.id.deviceButton),
             findViewById(R.id.usageAccessButton),
-            findViewById(R.id.healthSyncButton),
-            findViewById(R.id.langZh),
-            findViewById(R.id.langEn),
-            findViewById(R.id.langJa)
+            findViewById(R.id.healthSyncButton)
         )
-        findViewById<View>(R.id.sidebarFrame).background = ThemeUtils.buttonDrawable(this)
-    }
-
-    private fun loadBannerImage() {
-        val uriStr = prefs.getString("banner_uri", null) ?: return
-        try {
-            findViewById<com.google.android.material.imageview.ShapeableImageView>(R.id.bannerImage)
-                .setImageURI(Uri.parse(uriStr))
-        } catch (_: Exception) {}
-    }
-
-    private fun setupBrandText() {
-        val brand = findViewById<TextView>(R.id.brandText)
-        brand.text = prefs.getString("brand_text", getString(R.string.brand_name))
-        brand.setOnClickListener { showBrandEditDialog(brand) }
-    }
-
-    private fun showBrandEditDialog(brand: TextView) {
-        val input = EditText(this)
-        input.setText(brand.text)
-        input.setSelection(input.text.length)
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.brand_name))
-            .setView(input)
-            .setPositiveButton("保存") { _, _ ->
-                val text = input.text.toString().trim().ifEmpty { getString(R.string.brand_name) }
-                prefs.edit().putString("brand_text", text).apply()
-                brand.text = text
-            }
-            .setNegativeButton("取消", null)
-            .show()
     }
 
     private fun openUsageAccessSettings() {

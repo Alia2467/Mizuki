@@ -13,6 +13,7 @@
     <!-- 前台服务：后台持续采集 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- 通话状态：判断是否在打电话 -->
@@ -92,6 +93,6 @@
         <service
             android:name=".SensorService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location|health" />
     </application>
 </manifest>

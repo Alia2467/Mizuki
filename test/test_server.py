@@ -215,3 +215,78 @@ class TestLogs:
         logs = client.get("/api/logs").json()
         assert len(logs) >= 1
         assert logs[0]["type"] == "phone"
+
+
+# ── 离线判定 ──────────────────────────────────────────────────────────
+
+class TestOfflineDetection:
+    def test_phone_goes_offline_after_timeout(self, client):
+        """停止推送超过 phone_timeout_ms 后，phone_connected 变为 false。"""
+        # 先上报一次，手机在线
+        client.post("/phone-data", json=PHONE_PAYLOAD)
+        assert client.get("/health").json()["phone_connected"] is True
+
+        # 设置极短的超时阈值（300ms 是最低钳制值）
+        client.patch("/api/config", json={"phone_timeout_ms": 300})
+        # 等待超时
+        time.sleep(0.5)
+        assert client.get("/health").json()["phone_connected"] is False
+
+
+# ── WebUI 静态文件服务 ────────────────────────────────────────────────
+
+class TestWebUI:
+    def test_index_returns_html(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers.get("content-type", "")
+
+    def test_static_app_js(self, client):
+        resp = client.get("/static/app.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers.get("content-type", "")
+
+    def test_static_style_css(self, client):
+        resp = client.get("/static/style.css")
+        assert resp.status_code == 200
+        assert "css" in resp.headers.get("content-type", "")
+
+
+# ── 电脑状态采集开关 ──────────────────────────────────────────────────
+
+class TestComputerCollectToggle:
+    def test_computer_collect_enabled_in_config(self, client):
+        """默认配置包含 computer_collect_enabled 且为 true。"""
+        body = client.get("/api/config").json()
+        assert "computer_collect_enabled" in body
+        assert body["computer_collect_enabled"] is True
+
+    def test_disable_computer_collect(self, client):
+        """禁用前台采集后，computer 段不再包含前台窗口/进程/游戏/导航。"""
+        resp = client.patch("/api/config", json={"computer_collect_enabled": False})
+        assert resp.status_code == 200
+        assert "computer_collect_enabled" in resp.json()["updated"]
+
+        # 禁用后 computer 段不应包含前台数据
+        state = client.get("/api/state").json()
+        assert "foreground_window" not in state["computer"]
+        assert "is_gaming" not in state["computer"]
+        assert "is_navigating" not in state["computer"]
+
+        # 恢复启用
+        client.patch("/api/config", json={"computer_collect_enabled": True})
+        body = client.get("/api/config").json()
+        assert body["computer_collect_enabled"] is True
+
+
+# ── 连接状态 ──────────────────────────────────────────────────────────
+
+class TestConnectionStatus:
+    def test_health_endpoint(self, client):
+        """健康检查端点返回正确结构。"""
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert "version" in body
+        assert "phone_connected" in body

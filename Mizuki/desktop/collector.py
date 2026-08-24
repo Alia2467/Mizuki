@@ -29,7 +29,16 @@ try:
 except ImportError:  # pragma: no cover - 非 Windows 环境
     win32process = None
 
-# 游戏进程关键词（小写匹配）
+# 硬件采集占位值（psutil 不可用时回退）
+_HARDWARE_PLACEHOLDER: dict[str, Any] = {
+    "cpu_percent": 0,
+    "memory_percent": 0,
+    "memory_used_gb": 0.0,
+    "memory_total_gb": 0.0,
+    "disk_percent": 0,
+    "disk_used_gb": 0.0,
+    "disk_total_gb": 0.0,
+}
 GAME_KEYWORDS: tuple[str, ...] = (
     "steam",
     "league of legends",
@@ -58,7 +67,7 @@ NAVIGATION_KEYWORDS: tuple[str, ...] = (
 class ComputerCollector:
     """电脑状态采集器（后台线程）。"""
 
-    def __init__(self, interval: int = 5) -> None:
+    def __init__(self, interval: float = 5.0) -> None:
         self.interval = max(1, int(interval))
         self._data: dict[str, Any] = {}
         self._lock = threading.Lock()
@@ -92,18 +101,23 @@ class ComputerCollector:
         return any(kw in lowered for kw in keywords)
 
     def snapshot(self) -> dict[str, Any]:
-        """采集一次当前电脑状态。"""
-        title, process = self._active_window()
+        """采集一次当前电脑状态（始终包含硬件指标，前台窗口/进程/游戏/导航可选）。"""
         data = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "foreground_window": title,
-            "foreground_process": process,
-            "is_gaming": self._contains_any(process, GAME_KEYWORDS),
-            "is_navigating": self._contains_any(title, NAVIGATION_KEYWORDS),
             "local_ip": self._local_ip(),
         }
         data.update(self._snapshot_hardware())
         return data
+
+    def snapshot_foreground(self) -> dict[str, Any]:
+        """采集前台窗口/进程/游戏/导航状态（受 computer_collect_enabled 控制）。"""
+        title, process = self._active_window()
+        return {
+            "foreground_window": title,
+            "foreground_process": process,
+            "is_gaming": self._contains_any(process, GAME_KEYWORDS),
+            "is_navigating": self._contains_any(title, NAVIGATION_KEYWORDS),
+        }
 
     @staticmethod
     def _local_ip() -> str:
@@ -120,15 +134,7 @@ class ComputerCollector:
     def _snapshot_hardware() -> dict[str, Any]:
         """采集硬件占用指标（CPU / 内存 / 磁盘），psutil 不可用时返回占位值。"""
         if psutil is None:
-            return {
-                "cpu_percent": 0,
-                "memory_percent": 0,
-                "memory_used_gb": 0.0,
-                "memory_total_gb": 0.0,
-                "disk_percent": 0,
-                "disk_used_gb": 0.0,
-                "disk_total_gb": 0.0,
-            }
+            return dict(_HARDWARE_PLACEHOLDER)
         try:
             mem = psutil.virtual_memory()
             disk = psutil.disk_usage("/")
@@ -142,15 +148,7 @@ class ComputerCollector:
                 "disk_total_gb": round(disk.total / (1024 ** 3), 1),
             }
         except Exception:
-            return {
-                "cpu_percent": 0,
-                "memory_percent": 0,
-                "memory_used_gb": 0.0,
-                "memory_total_gb": 0.0,
-                "disk_percent": 0,
-                "disk_used_gb": 0.0,
-                "disk_total_gb": 0.0,
-            }
+            return dict(_HARDWARE_PLACEHOLDER)
 
     # ------------------------------------------------------------------
     # 后台线程
@@ -182,4 +180,9 @@ class ComputerCollector:
     def get(self) -> dict[str, Any]:
         """返回最近一次采集到的电脑状态。"""
         with self._lock:
-            return dict(self._data) if self._data else self.snapshot()
+            return dict(self._data)
+
+    def get_or_empty(self) -> dict[str, Any]:
+        """返回最近一次采集到的电脑状态，缓存为空返回空 dict。"""
+        with self._lock:
+            return dict(self._data) if self._data else {}

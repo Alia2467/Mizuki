@@ -26,7 +26,7 @@ AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机
 ## 数据流
 
 ```
-手机传感器/外部API → 周期采集（30s，失败占位值）→ HTTP POST /phone-data
+手机传感器/外部API → 周期采集（10s，失败占位值）→ HTTP POST /phone-data
     → 控制台合并 + 在线判定 + 异步落盘 collected.jsonl
     → 插件周期拉取 /merged-data（15s）→ 安静模式过滤 → 规则门控 + 冷却
     → 注入情境上下文 → MaiBot 结合人设主动说话 → QQ

@@ -1,5 +1,6 @@
 """pytest 配置：为测试提供 FastAPI TestClient 共享 fixtures。"""
 
+import json
 import sys
 from pathlib import Path
 
@@ -26,7 +27,7 @@ def _isolate_config(tmp_path, monkeypatch):
     # 重新加载默认配置到临时路径
     server.config.update(server.DEFAULT_CONFIG)
     cfg_path.write_text(
-        __import__("json").dumps(server.DEFAULT_CONFIG, ensure_ascii=False, indent=2),
+        json.dumps(server.DEFAULT_CONFIG, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     # 重建 storage 指向临时文件

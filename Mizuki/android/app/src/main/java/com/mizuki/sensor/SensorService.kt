@@ -99,6 +99,9 @@ class SensorService : Service(), SensorEventListener {
     /** 离线补传队列：发送失败的载荷暂存本地，恢复后自动补传。 */
     private val pendingStore by lazy { PendingStore(applicationContext) }
 
+    /** Health Connect 客户端缓存（懒初始化，避免每次 fetchHealth 重复创建）。 */
+    private var healthConnectClient: HealthConnectClient? = null
+
     private val collectRunnable = object : Runnable {
         override fun run() {
             collectAndSend()
@@ -154,8 +157,9 @@ class SensorService : Service(), SensorEventListener {
             val channel = NotificationChannel(
                 channelId,
                 "海月感知",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             )
+            channel.description = "海月感知正在后台采集数据"
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
@@ -174,6 +178,7 @@ class SensorService : Service(), SensorEventListener {
             .setLargeIcon(largeIcon)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
         // Android 14+（API 34）要求 startForeground 显式指定前台服务类型，否则抛 MissingForegroundServiceTypeException；
@@ -512,7 +517,7 @@ class SensorService : Service(), SensorEventListener {
         var sleepHours = 0.0
         try {
             runBlocking {
-                val hc = HealthConnectClient.getOrCreate(this@SensorService)
+                val hc = healthConnectClient ?: HealthConnectClient.getOrCreate(this@SensorService).also { healthConnectClient = it }
                 val now = Instant.now()
                 val zone = ZoneId.systemDefault()
                 val startOfDay = now.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
@@ -732,7 +737,7 @@ class SensorService : Service(), SensorEventListener {
         /** 连接默认值：各页面占位/兜底的唯一数据源，禁止另处重复字面量。 */
         const val DEFAULT_IP = "192.168.1.4"
         const val DEFAULT_PORT = 821
-        const val DEFAULT_INTERVAL = 300
+        const val DEFAULT_INTERVAL = 10000
 
         private const val NOTIFICATION_ID = 1
         private const val TAG = "MizukiSensor"

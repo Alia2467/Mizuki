@@ -78,7 +78,6 @@ def resource_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-BASE_DIR = app_dir()
 STATIC_DIR = resource_dir() / "static"
 CONFIG_PATH = app_dir() / "config.json"
 DATA_FILE = app_dir() / "data" / "collected.jsonl"
@@ -86,6 +85,7 @@ DATA_FILE = app_dir() / "data" / "collected.jsonl"
 DEFAULT_CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
     "port": 821,
+    "computer_collect_enabled": True,  # 是否启用电脑状态采集（前台窗口/进程/游戏/导航）
     "computer_collect_interval": 5000,  # 电脑状态采集间隔（毫秒）
     "phone_timeout_ms": 90000,  # 超过该时长未上报视为手机离线（毫秒）
     "poll_interval": 5000,  # WebUI 仪表盘轮询间隔（毫秒）
@@ -211,7 +211,10 @@ def _computer_persistence_loop() -> None:
     global _last_computer_key
     while True:
         try:
-            data = collector.get()
+            data = collector.get_or_empty()
+            if not data:
+                time.sleep(config["computer_collect_interval"] / 1000)
+                continue
             key = (
                 data.get("foreground_window"),
                 data.get("foreground_process"),
@@ -238,21 +241,42 @@ def _phone_is_online() -> bool:
 
 def _build_state() -> dict[str, Any]:
     """构造仪表盘与插件共用的完整状态。"""
-    with _state_lock:
-        phone = dict(_latest_phone)
-        phone_last_seen = _phone_received_at.isoformat(timespec="seconds") if _phone_received_at else None
-    return {
-        "timestamp": _iso_now(),
-        "phone": phone,
-        "phone_connected": _phone_is_online(),
-        "phone_last_seen": phone_last_seen,
-        "computer": collector.get(),
-        "server": {
-            "started_at": _started_at.isoformat(timespec="seconds"),
-            "uptime_seconds": int((datetime.now() - _started_at).total_seconds()),
-            "version": VERSION,
-        },
-    }
+    try:
+        with _state_lock:
+            phone = dict(_latest_phone)
+            phone_last_seen = _phone_received_at.isoformat(timespec="seconds") if _phone_received_at else None
+        # 硬件检测始终运行，前台窗口/进程/游戏/导航受开关控制
+        computer = collector.get()
+        if config.get("computer_collect_enabled", True):
+            computer.update(_collector_foreground_snapshot())
+        return {
+            "timestamp": _iso_now(),
+            "phone": phone,
+            "phone_connected": _phone_is_online(),
+            "phone_last_seen": phone_last_seen,
+            "computer": computer,
+            "server": {
+                "started_at": _started_at.isoformat(timespec="seconds"),
+                "uptime_seconds": int((datetime.now() - _started_at).total_seconds()),
+                "version": VERSION,
+            },
+        }
+    except Exception as exc:
+        print(f"[_build_state] 异常: {exc}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "timestamp": _iso_now(),
+            "phone": {},
+            "phone_connected": False,
+            "computer": {},
+            "server": {"version": VERSION, "error": str(exc)},
+        }
+
+
+def _collector_foreground_snapshot() -> dict[str, Any]:
+    """采集前台窗口/进程/游戏/导航状态（供 computer_collect_enabled 合并）。"""
+    return collector.snapshot_foreground()
 
 
 def _merged_data() -> dict[str, Any]:
@@ -315,7 +339,13 @@ async def merged_data(request: Request) -> JSONResponse:
     denied = _check_token(request)
     if denied is not None:
         return denied
-    return JSONResponse(_merged_data())
+    try:
+        return JSONResponse(_merged_data())
+    except Exception as exc:
+        print(f"[merged-data] 异常: {exc}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
 
 
 @app.get("/api/config")
@@ -324,6 +354,7 @@ async def api_config() -> JSONResponse:
     return JSONResponse({
         "host": config["host"],
         "port": config["port"],
+        "computer_collect_enabled": config.get("computer_collect_enabled", True),
         "computer_collect_interval": config["computer_collect_interval"],
         "phone_timeout_ms": config["phone_timeout_ms"],
         "poll_interval": config.get("poll_interval", 5),
@@ -337,7 +368,7 @@ async def api_config() -> JSONResponse:
 async def api_config_update(request: Request) -> JSONResponse:
     """更新配置并持久化到 config.json。"""
     body = await request.json()
-    allowed = {"computer_collect_interval", "phone_timeout_ms", "shared_token", "poll_interval"}
+    allowed = {"computer_collect_enabled", "computer_collect_interval", "phone_timeout_ms", "shared_token", "poll_interval"}
     updated = []
     for key in allowed:
         if key in body:
@@ -393,10 +424,11 @@ def _read_tail_lines(path: Path, limit: int) -> list[str]:
 # 启动
 # ----------------------------------------------------------------------
 def start_services() -> None:
-    """启动采集器与落盘线程（供桌面入口 app.py 与命令行入口共用）。"""
+    """启动采集器与落盘线程（硬件检测始终运行，前台数据落盘受开关控制）。"""
     storage.start()
-    collector.start()
-    threading.Thread(target=_computer_persistence_loop, daemon=True, name="computer-persistence").start()
+    collector.start()  # 硬件检测始终运行
+    if config.get("computer_collect_enabled", True):
+        threading.Thread(target=_computer_persistence_loop, daemon=True, name="computer-persistence").start()
 
 
 def stop_services() -> None:

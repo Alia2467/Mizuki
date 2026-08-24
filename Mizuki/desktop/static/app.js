@@ -177,6 +177,7 @@
     document.getElementById("cfg-edit-timeout").value = pick(cfg, "phone_timeout_ms", 90000);
     document.getElementById("cfg-edit-token").value = pick(cfg, "shared_token", "");
     document.getElementById("cfg-edit-poll").value = pick(cfg, "poll_interval", 5000);
+    document.getElementById("cfg-edit-computer-enabled").checked = pick(cfg, "computer_collect_enabled", true);
 
     // 更新轮询间隔（poll_interval 已为毫秒，无需转换）
     var newInterval = pick(cfg, "poll_interval", 5000);
@@ -248,6 +249,7 @@
   document.getElementById("settings-save").addEventListener("click", async function () {
     var msg = document.getElementById("settings-msg");
     var body = {
+      computer_collect_enabled: document.getElementById("cfg-edit-computer-enabled").checked,
       computer_collect_interval: parseInt(document.getElementById("cfg-edit-interval").value) || 5000,
       phone_timeout_ms: parseInt(document.getElementById("cfg-edit-timeout").value) || 90000,
       shared_token: document.getElementById("cfg-edit-token").value.trim(),

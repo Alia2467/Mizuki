@@ -33,9 +33,9 @@ def _redirect_logs() -> None:
 
 
 def make_icon() -> Image.Image:
-    """托盘图标：优先用打包进去的 icon.jpg（即 应用头像），失败则画月牙。"""
+    """托盘图标：优先用打包进去的 icon.ico，失败则画月牙。"""
     try:
-        img = Image.open(resource_dir() / "icon.jpg").convert("RGBA")
+        img = Image.open(resource_dir() / "icon.ico").convert("RGBA")
         img.thumbnail((64, 64), Image.LANCZOS)
         return img
     except Exception:

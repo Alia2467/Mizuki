@@ -90,7 +90,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:background="@drawable/bg_button"
-                    android:hint="30"
+                    android:hint="10000"
                     android:inputType="number"
                     android:padding="12dp"
                     android:singleLine="true"

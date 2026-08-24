@@ -10,7 +10,7 @@
 
 import asyncio
 import time
-from typing import Any, List
+from typing import Any
 
 import httpx
 
@@ -45,7 +45,6 @@ class SourceConfig(PluginConfigBase):
     data_url: str = Field(default="http://localhost:821/merged-data", description="电脑端合并数据接口地址")
     token: str = Field(default="", description="共享鉴权 token（与控制台 config.json 的 shared_token 一致；控制台未启用鉴权时留空）")
     fetch_interval: int = Field(default=15000, ge=300, description="数据拉取间隔（毫秒）")
-    request_timeout: int = Field(default=10000, ge=300, description="单次请求超时（毫秒）")
 
 
 class TargetConfig(PluginConfigBase):
@@ -70,46 +69,48 @@ class ProactiveConfig(PluginConfigBase):
 
     enabled: bool = Field(default=True, description="是否启用主动说话")
     cooldown_ms: int = Field(default=1800000, ge=60000, description="同一触发条件的冷却时间（毫秒）")
-    quiet_when_navigating: bool = Field(default=True, description="导航中保持安静（不说话）")
-    quiet_when_calling: bool = Field(default=True, description="通话中保持安静（不说话）")
 
 
 class RuleSpec(PluginConfigBase):
     """声明式规则：对合并数据某字段做条件判断，命中则注入情境并请求主动说话。"""
+
+    __ui_label__ = "规则条目"
+    __ui_icon__ = "bell"
+    __ui_order__ = 0
 
     key: str = Field(default="", description="规则键（冷却计时按此键独立）")
     enabled: bool = Field(default=True, description="是否启用本条规则")
     field: str = Field(default="", description="合并数据字段路径，如 phone.health.heart_rate")
     op: str = Field(default=">=", description="比较运算符：>= / > / <= / < / == / in")
     value: Any = Field(default=0, description="阈值；op=in 时为候选值列表")
-    situation: str = Field(default="", description="注入情境模板，支持占位符 {_me} 与 {value}")
-    intent: str = Field(default="", description="主动说话意图模板，支持占位符 {_me} 与 {value}")
+    situation: str = Field(default="", description="注入情境模板，支持占位符 {value}")
+    intent: str = Field(default="", description="主动说话意图模板，支持占位符 {value}")
 
 
-def _default_rules() -> List[RuleSpec]:
+def _default_rules() -> list[RuleSpec]:
     """内置规则表默认值（与旧版硬编码规则等价的声明式表达）。"""
     return [
         RuleSpec(
             key="heart_high", field="phone.health.heart_rate", op=">=", value=100,
-            situation="{_me}当前心率 {value} 次/分，偏高。",
-            intent="{_me}心率有点偏高，温柔地关心 TA，提醒 TA 别太累、注意休息。",
+            situation="当前心率 {value} 次/分，偏高。",
+            intent="心率有点偏高，温柔地关心 TA，提醒 TA 别太累、注意休息。",
         ),
         RuleSpec(
             key="steps", field="phone.health.steps", op=">=", value=10000,
-            situation="{_me}今天已经走了 {value} 步。",
-            intent="{_me}今天走了很多路，心疼地关心 TA，让 TA 放松一下腿。",
+            situation="今天已经走了 {value} 步。",
+            intent="今天走了很多路，心疼地关心 TA，让 TA 放松一下腿。",
         ),
         RuleSpec(
             key="weather_rain", field="phone.weather.condition", op="in",
             # 候选值与契约受控词表（架构规格 §2.1）一致，不得新造词
             value=["rain", "snow", "shower", "drizzle", "thunderstorm"],
             situation="当前天气为 {value}。",
-            intent="外面在下雨（或下雪），提醒 {_me} 出门带伞、路上注意安全。",
+            intent="外面在下雨（或下雪），提醒 TA 出门带伞、路上注意安全。",
         ),
         RuleSpec(
             key="weather_hot", field="phone.weather.temperature", op=">=", value=35,
             situation="当前温度 {value} ℃，比较热。",
-            intent="天气很热，提醒 {_me} 多喝水、注意防暑。",
+            intent="天气很热，提醒 TA 多喝水、注意防暑。",
         ),
     ]
 
@@ -121,18 +122,7 @@ class RulesConfig(PluginConfigBase):
     __ui_icon__ = "bell"
     __ui_order__ = 4
 
-    nav_end_enabled: bool = Field(default=True, description="是否启用导航结束问候（状态翻转检测，不进规则表）")
-    table: List[RuleSpec] = Field(default_factory=_default_rules, description="声明式规则表，按顺序求值，首个命中即触发")
-
-
-class PersonaConfig(PluginConfigBase):
-    """人设：自定义对用户的称呼（替换主动说话文案里的「哥哥」）。"""
-
-    __ui_label__ = "人设"
-    __ui_icon__ = "smile"
-    __ui_order__ = 5
-
-    appellation: str = Field(default="哥哥", description="对用户的称呼，例如「哥哥」「主人」「宝宝」等")
+    table: list[RuleSpec] = Field(default_factory=_default_rules, description="声明式规则表，按顺序求值，首个命中即触发")
 
 
 class MizukiSensorConfig(PluginConfigBase):
@@ -143,7 +133,6 @@ class MizukiSensorConfig(PluginConfigBase):
     target: TargetConfig = Field(default_factory=TargetConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
     rules: RulesConfig = Field(default_factory=RulesConfig)
-    persona: PersonaConfig = Field(default_factory=PersonaConfig)
 
 
 # ----------------------------------------------------------------------
@@ -162,17 +151,15 @@ class MizukiSensorPlugin(MaiBotPlugin):
         self._stream_id: str = ""
         self._last_navigating: bool = False
         self._last_spoken: dict[str, float] = {}
-
-    @property
-    def _me(self) -> str:
-        """对用户的称呼（可在「人设」配置里自定义）。"""
-        return (self.config.persona.appellation or "哥哥").strip() or "哥哥"
+        self._connection_status: str = "unknown"
 
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
     async def on_load(self) -> None:
         self._get_logger().info("海月感知插件已加载")
+        # 启动时检测连接状态
+        await self._test_connection()
         if self.config.plugin.enabled:
             self._loop_task = asyncio.create_task(self._main_loop())
 
@@ -190,7 +177,40 @@ class MizukiSensorPlugin(MaiBotPlugin):
         del config_data
         # 目标配置可能变更，清空缓存让下一轮重新解析聊天流
         self._stream_id = ""
+        # 配置更新后重新检测连接
+        await self._test_connection()
         self._get_logger().info("海月感知配置已更新: scope=%s version=%s", scope, version)
+
+    # ------------------------------------------------------------------
+    # 连接检测
+    # ------------------------------------------------------------------
+    async def _test_connection(self) -> None:
+        """检测与控制台的连接状态。"""
+        url = self.config.source.data_url.replace("/merged-data", "/health")
+        headers: dict[str, str] = {}
+        if self.config.source.token:
+            headers[TOKEN_HEADER] = self.config.source.token
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    body = resp.json()
+                    if body.get("status") == "ok":
+                        self._connection_status = "connected"
+                        self._get_logger().info(
+                            "控制台连接成功: version=%s phone_connected=%s",
+                            body.get("version", "unknown"),
+                            body.get("phone_connected", "unknown"),
+                        )
+                    else:
+                        self._connection_status = "error"
+                        self._get_logger().warning("控制台响应异常: %s", body)
+                else:
+                    self._connection_status = "error"
+                    self._get_logger().warning("控制台返回错误: HTTP %s", resp.status_code)
+        except Exception as exc:
+            self._connection_status = "disconnected"
+            self._get_logger().error("控制台连接失败: %s", exc)
 
     # ------------------------------------------------------------------
     # 主循环
@@ -203,7 +223,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
                 raise
             except Exception as exc:
                 self._get_logger().error("海月感知主循环异常: %s", exc)
-            await asyncio.sleep(max(5, int(self.config.source.fetch_interval) / 1000))
+            await asyncio.sleep(max(5000, int(self.config.source.fetch_interval)) / 1000)
 
     async def _tick(self) -> None:
         data = await self._fetch_data()
@@ -222,30 +242,27 @@ class MizukiSensorPlugin(MaiBotPlugin):
         is_calling = bool(usage.get("is_calling"))
 
         # 导航结束检测（nav_end）
-        if self.config.rules.nav_end_enabled and self._last_navigating and not is_navigating:
-            me = self._me
+        if self._last_navigating and not is_navigating:
             await self._proactive(
                 stream_id,
                 "nav_end",
-                f"{me}刚刚结束了导航，应该到达目的地了。",
-                f"{me}刚结束导航（可能到家了），结合你的身份温柔地问候 TA、关心 TA 是否累了。",
+                "刚刚结束了导航，应该到达目的地了。",
+                "刚结束导航（可能到家了），结合你的身份温柔地问候 TA、关心 TA 是否累了。",
             )
 
         self._last_navigating = is_navigating
 
-        # 安静模式下仍继续记录状态，保证导航翻转检测不断链
+        # 主动说话关闭时跳过
         if not self.config.proactive.enabled:
             return
-        if (is_navigating and self.config.proactive.quiet_when_navigating) or (
-            is_calling and self.config.proactive.quiet_when_calling
-        ):
+        # 安静模式：导航中/通话中不说话
+        if is_navigating or is_calling:
             return
 
         await self._evaluate_rules(stream_id, data)
 
     async def _evaluate_rules(self, stream_id: str, data: dict[str, Any]) -> None:
         """按声明式规则表顺序求值，首个命中的规则触发后即结束本轮。"""
-        me = self._me
         for rule in self.config.rules.table:
             if not rule.enabled or not rule.key or not rule.field:
                 continue
@@ -255,8 +272,8 @@ class MizukiSensorPlugin(MaiBotPlugin):
             await self._proactive(
                 stream_id,
                 rule.key,
-                _format_template(rule.situation, me, actual),
-                _format_template(rule.intent, me, actual),
+                _format_template(rule.situation, actual),
+                _format_template(rule.intent, actual),
             )
             return
 
@@ -304,14 +321,17 @@ class MizukiSensorPlugin(MaiBotPlugin):
         if self.config.source.token:
             headers[TOKEN_HEADER] = self.config.source.token
         try:
-            async with httpx.AsyncClient(timeout=self.config.source.request_timeout / 1000) as client:
+            async with httpx.AsyncClient(timeout=3) as client:
                 resp = await client.get(url, headers=headers)
                 if resp.status_code != 200:
+                    self._connection_status = "error"
                     self._get_logger().warning("拉取数据失败: HTTP %s", resp.status_code)
                     return {}
                 data = resp.json()
+                self._connection_status = "connected"
                 return data if isinstance(data, dict) else {}
         except Exception as exc:
+            self._connection_status = "disconnected"
             self._get_logger().warning("拉取电脑端数据失败: %s", exc)
             return {}
 
@@ -391,11 +411,11 @@ def _compare(actual: Any, op: str, expected: Any) -> bool:
     return False
 
 
-def _format_template(template: str, me: str, value: Any) -> str:
-    """渲染情境/意图模板，占位符 {_me} 与 {value}；渲染失败返回原模板。"""
+def _format_template(template: str, value: Any) -> str:
+    """渲染情境/意图模板，占位符 {value}；渲染失败返回原模板。"""
     display = int(value) if isinstance(value, float) and value.is_integer() else value
     try:
-        return template.format(_me=me, value=display)
+        return template.format(value=display)
     except (KeyError, IndexError, ValueError):
         return template
 

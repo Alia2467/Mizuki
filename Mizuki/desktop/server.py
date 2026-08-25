@@ -1,4 +1,4 @@
-"""海月感知（Mizuki）— 电脑端汇聚服务（控制台）
+"""Mizuki — 电脑端汇聚服务（控制台）
 
 职责：
 - 接收手机端 APP 推送的感知数据（POST /phone-data）
@@ -8,8 +8,8 @@
 
 「程序」与「收集到的信息」分离：
 - 程序：server.py（本文件，HTTP 服务）+ collector.py（电脑状态采集）
-- 收集装置：storage.py（队列 + 专用写盘线程，异步落盘，不阻塞请求路径）
-- 收集到的信息：data/collected.jsonl（与程序代码分目录存放）
+- 收集装置：database.py（SQLite 异步写入 + 历史查询）
+- 收集到的信息：data/collected.db（与程序代码分目录）
 
 数据契约（手机 → 电脑，POST /phone-data）：
 {
@@ -50,7 +50,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from collector import ComputerCollector
-from storage import DataCollector
+from database import DataCollector
 
 # ----------------------------------------------------------------------
 # 常量与路径（兼容 PyInstaller 打包：程序目录 vs 资源目录分离）
@@ -81,7 +81,6 @@ def resource_dir() -> Path:
 
 STATIC_DIR = resource_dir() / "static"
 CONFIG_PATH = app_dir() / "config.json"
-DATA_FILE = app_dir() / "data" / "collected.jsonl"
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
@@ -176,7 +175,7 @@ def save_config() -> None:
 
 config = load_config()
 collector = ComputerCollector(interval=config["computer_collect_interval"] / 1000)
-storage = DataCollector(data_file=DATA_FILE)  # 收集装置：队列 + 专用写盘线程，与主服务解耦
+storage = DataCollector(db_file=app_dir() / "data" / "collected.db")  # 收集装置：队列 + 专用写盘线程，与主服务解耦
 
 # 插件心跳追踪（plugin_id -> 最后心跳时间）
 _plugin_heartbeats: dict[str, datetime] = {}
@@ -224,7 +223,6 @@ def _computer_persistence_loop() -> None:
                 data.get("foreground_window"),
                 data.get("foreground_process"),
                 data.get("is_gaming"),
-                data.get("is_navigating"),
             )
             if key != _last_computer_key:
                 _last_computer_key = key
@@ -363,7 +361,7 @@ async def api_config() -> JSONResponse:
         "poll_interval": config.get("poll_interval", 5),
         "shared_token": config["shared_token"],
         "auth_enabled": _auth_enabled(),
-        "data_file": str(storage.data_file),
+        "db_file": str(storage.db_file),
     })
 
 
@@ -387,17 +385,34 @@ async def api_config_update(request: Request) -> JSONResponse:
 
 
 @app.get("/api/logs")
-async def api_logs(limit: int = 20) -> JSONResponse:
-    """返回最近 N 条已落盘记录（新的在前），供仪表盘展示。"""
+async def api_logs(limit: int = 20, offset: int = 0, record_type: str | None = None) -> JSONResponse:
+    """返回历史记录（新的在前），支持分页和类型筛选。"""
     limit = max(1, min(int(limit), 200))
-    lines = _read_tail_lines(DATA_FILE, limit)
-    records: list[dict[str, Any]] = []
-    for line in reversed(lines[-limit:]):
-        try:
-            records.append(json.loads(line))
-        except Exception:
-            continue
+    records = storage.query(record_type=record_type, limit=limit, offset=offset)
     return JSONResponse(records)
+
+
+@app.get("/api/stats")
+async def api_stats() -> JSONResponse:
+    """返回数据统计。"""
+    return JSONResponse(storage.get_stats())
+
+
+@app.get("/api/export/{format}")
+async def api_export(format: str, record_type: str | None = None) -> FileResponse:
+    """导出数据（json 或 csv）。"""
+    export_dir = app_dir() / "data" / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if format == "json":
+        path = export_dir / f"mizuki_export_{timestamp}.json"
+        storage.export_json(path, record_type=record_type)
+    elif format == "csv":
+        path = export_dir / f"mizuki_export_{timestamp}.csv"
+        storage.export_csv(path, record_type=record_type)
+    else:
+        return JSONResponse({"status": "error", "message": "不支持的格式"}, status_code=400)
+    return FileResponse(path, filename=path.name, media_type="application/octet-stream")
 
 
 @app.post("/api/plugin-heartbeat")
@@ -424,38 +439,47 @@ async def plugin_status() -> JSONResponse:
     return JSONResponse({"plugins": plugins, "timeout": _PLUGIN_HEARTBEAT_TIMEOUT})
 
 
-def _read_tail_lines(path: Path, limit: int) -> list[str]:
-    """读取文件末尾最多 limit 行；大文件只读尾部块，避免整读劣化。"""
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return []
-    if size == 0:
-        return []
-    # 单条记录上限按 8KB 估算，多留一块避免截断首行
-    chunk = min(size, limit * 8192 + 8192)
-    try:
-        with path.open("rb") as f:
-            f.seek(size - chunk)
-            data = f.read()
-    except OSError:
-        return []
-    lines = data.decode("utf-8", errors="replace").splitlines()
-    # 分块读取时首行可能被截断，仅在非整读时丢弃
-    if chunk < size:
-        lines = lines[1:]
-    return lines[-limit:]
+# ----------------------------------------------------------------------
+# 配置热重载
+# ----------------------------------------------------------------------
+_config_watch_thread: threading.Thread | None = None
+_config_mtime: float = 0
+
+
+def _config_watcher() -> None:
+    """监听 config.json 变化，自动重载配置。"""
+    global _config_mtime
+    while True:
+        time.sleep(5)
+        try:
+            if not CONFIG_PATH.exists():
+                continue
+            mtime = CONFIG_PATH.stat().st_mtime
+            if mtime == _config_mtime:
+                continue
+            _config_mtime = mtime
+            new_config = load_config()
+            config.update(new_config)
+            collector.interval = config["computer_collect_interval"] / 1000
+            print(f"[config] 配置已热重载: {list(new_config.keys())}")
+        except Exception as exc:
+            print(f"[config] 热重载失败: {exc}")
 
 
 # ----------------------------------------------------------------------
 # 启动
 # ----------------------------------------------------------------------
 def start_services() -> None:
-    """启动采集器与落盘线程（硬件检测始终运行，前台数据落盘受开关控制）。"""
+    """启动采集器、落盘线程和配置热重载（硬件检测始终运行，前台数据落盘受开关控制）。"""
     storage.start()
     collector.start()  # 硬件检测始终运行
     if config.get("computer_collect_enabled", True):
         threading.Thread(target=_computer_persistence_loop, daemon=True, name="computer-persistence").start()
+    # 启动配置热重载监听
+    global _config_watch_thread, _config_mtime
+    _config_mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else 0
+    _config_watch_thread = threading.Thread(target=_config_watcher, daemon=True, name="config-watcher")
+    _config_watch_thread.start()
 
 
 def stop_services() -> None:
@@ -498,14 +522,14 @@ def create_server() -> uvicorn.Server:
 
 def main() -> None:
     """命令行入口：启动采集与落盘线程，前台运行 HTTP 服务。"""
-    print("📡 海月感知 · 控制台 已启动")
+    print("📡 Mizuki · 控制台 已启动")
     print(f"   WebUI 仪表盘:  http://localhost:{config['port']}/")
     print(f"   手机数据接口:  http://<你的局域网IP>:{config['port']}/phone-data")
     print(f"   合并数据接口:  http://localhost:{config['port']}/merged-data")
     if not _auth_enabled():
         print("⚠ [安全] shared_token 未配置，接口鉴权已关闭。在 config.json 填入 shared_token，并在手机端/插件配置同一 token 后重启即可启用。")
     start_services()
-    print(f"   数据落盘位置:  {storage.data_file}")
+    print(f"   数据落盘位置:  {storage.db_file}")
     server = create_server()
     try:
         server.run()

@@ -56,7 +56,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * 海月感知（Mizuki）— 后台采集服务（前台服务）
+ * Mizuki — 后台采集服务（前台服务）
  *
  * 采集：GPS/城市、天气（Open-Meteo）、健康（Health Connect + 计步传感器）、
  * 前台应用、导航/通话/听音乐状态，并 HTTP POST 到电脑端。
@@ -156,10 +156,10 @@ class SensorService : Service(), SensorEventListener {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
-                "海月感知",
+                "海月之音",
                 NotificationManager.IMPORTANCE_DEFAULT
             )
-            channel.description = "海月感知正在后台采集数据"
+            channel.description = "海月之音正在后台采集数据"
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
         }
@@ -171,7 +171,7 @@ class SensorService : Service(), SensorEventListener {
         )
         val largeIcon = BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
         val notification: Notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("海月感知 运行中")
+            .setContentTitle("海月之音 运行中")
             .setContentText("正在采集并上报数据…")
             // 小图标必须用单色矢量；mipmap 彩色位图在部分系统上渲染异常
             .setSmallIcon(R.drawable.ic_notification)

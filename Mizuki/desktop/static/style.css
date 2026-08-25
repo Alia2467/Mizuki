@@ -677,6 +677,108 @@ html.dark body::before {
   color: var(--log-text);
 }
 
+/* ---------- 历史数据图表 ---------- */
+.history-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.history-tab {
+  padding: 4px 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.history-tab:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.history-tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.history-chart {
+  padding: 16px 0 8px;
+  min-height: 120px;
+}
+
+.history-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 100px;
+  padding: 0 4px;
+}
+
+.history-bar {
+  flex: 1;
+  min-width: 8px;
+  max-width: 24px;
+  border-radius: 3px 3px 0 0;
+  background: var(--accent);
+  opacity: 0.7;
+  transition: opacity 0.15s;
+  position: relative;
+}
+
+.history-bar:hover {
+  opacity: 1;
+}
+
+.history-bar::after {
+  content: attr(data-value);
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.history-bar:hover::after {
+  opacity: 1;
+}
+
+.history-labels {
+  display: flex;
+  gap: 3px;
+  padding: 4px 4px 0;
+}
+
+.history-label {
+  flex: 1;
+  min-width: 8px;
+  max-width: 24px;
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-empty {
+  display: none;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 32px 0;
+}
+
+.history-empty.show {
+  display: block;
+}
+
 /* ---------- 页脚 ---------- */
 .foot {
   margin-top: 2vh;

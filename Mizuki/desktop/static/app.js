@@ -150,7 +150,6 @@
     setText("pc-process", pick(state.computer, "foreground_process", "—"));
     const flags = [];
     if (pick(state.computer, "is_gaming")) flags.push("🎮 游戏中");
-    if (pick(state.computer, "is_navigating")) flags.push("🧭 导航中");
     setText("pc-flags", flags.length ? flags.join(" · ") : "正常", flags.length ? "yes" : "");
 
     // 系统硬件
@@ -260,6 +259,81 @@
     } catch (err) { /* 忽略 */ }
   }
 
+  // 历史数据图表
+  var historyMetric = "heart_rate";
+  var historyData = [];
+
+  async function pollHistory() {
+    try {
+      const resp = await fetch("/api/logs?record_type=phone&limit=20", { cache: "no-store" });
+      if (resp.ok) {
+        historyData = await resp.json();
+        renderHistory();
+      }
+    } catch (err) { /* 忽略 */ }
+  }
+
+  function renderHistory() {
+    var barsEl = document.getElementById("history-bars");
+    var labelsEl = document.getElementById("history-labels");
+    var emptyEl = document.getElementById("history-empty");
+    if (!historyData || !historyData.length) {
+      barsEl.innerHTML = "";
+      labelsEl.innerHTML = "";
+      emptyEl.classList.add("show");
+      return;
+    }
+    emptyEl.classList.remove("show");
+    // 提取指标值
+    var values = [];
+    var labels = [];
+    for (var i = historyData.length - 1; i >= 0; i--) {
+      var d = historyData[i].data || JSON.parse(historyData[i].data);
+      var val = 0;
+      if (historyMetric === "heart_rate") {
+        val = d.health && d.health.heart_rate ? d.health.heart_rate : 0;
+      } else if (historyMetric === "steps") {
+        val = d.health && d.health.steps ? d.health.steps : 0;
+      }
+      if (val > 0) {
+        values.push(val);
+        labels.push(fmtShortTime(historyData[i].received_at || historyData[i].timestamp));
+      }
+    }
+    if (!values.length) {
+      barsEl.innerHTML = "";
+      labelsEl.innerHTML = "";
+      emptyEl.classList.add("show");
+      return;
+    }
+    var maxVal = Math.max.apply(null, values);
+    // 渲染柱状图
+    barsEl.innerHTML = values.map(function (v) {
+      var pct = Math.max(5, (v / maxVal) * 100);
+      return '<div class="history-bar" style="height:' + pct + '%" data-value="' + v + '"></div>';
+    }).join("");
+    labelsEl.innerHTML = labels.map(function (l) {
+      return '<div class="history-label">' + l + '</div>';
+    }).join("");
+  }
+
+  function fmtShortTime(iso) {
+    if (!iso) return "";
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  // 历史数据标签切换
+  document.querySelectorAll(".history-tab").forEach(function (tab) {
+    tab.addEventListener("click", function () {
+      document.querySelectorAll(".history-tab").forEach(function (t) { t.classList.remove("active"); });
+      tab.classList.add("active");
+      historyMetric = tab.dataset.metric;
+      renderHistory();
+    });
+  });
+
   // 设置面板
   var settingsCard = document.getElementById("settings-card");
   document.getElementById("settings-btn").addEventListener("click", function () {
@@ -353,8 +427,10 @@
   pollConfig();
   pollLogs();
   pollPluginStatus();
+  pollHistory();
   setInterval(poll, REFRESH_MS);
   pollLogsTimer = setInterval(pollLogs, 5000);
   setInterval(pollConfig, 60000);
   setInterval(pollPluginStatus, 10000);
+  setInterval(pollHistory, 30000);
 })();

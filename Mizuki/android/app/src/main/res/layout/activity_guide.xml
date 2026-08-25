@@ -51,7 +51,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="海月感知 是什么"
+                android:text="海月之音 是什么"
                 android:textColor="@color/text_primary"
                 android:textSize="16sp"
                 android:textStyle="bold" />
@@ -61,7 +61,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:lineSpacingExtra="4dp"
-                android:text="海月感知（Mizuki）是「AI 伴侣感官系统」的手机端采集 APP。它把手机的状态（定位、天气、步数、心率、睡眠、正在用的应用、在不在听歌、在不在打电话等）实时发送到电脑端，再由电脑端汇总并交给 MaiBot，让 AI 伴侣「看得见」你当下的处境，从而更自然、更贴心地主动和你说话。"
+                android:text="海月之音（Mizuki）是「AI 伴侣感官系统」的手机端采集 APP。它把手机的状态（定位、天气、步数、心率、睡眠、正在用的应用、在不在听歌、在不在打电话等）实时发送到电脑端，再由电脑端汇总并交给 MaiBot，让 AI 伴侣「看得见」你当下的处境，从而更自然、更贴心地主动和你说话。"
                 android:textColor="@color/text_primary"
                 android:textSize="14sp" />
 

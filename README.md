@@ -1,6 +1,6 @@
 # Mizuki
 
-AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机端采集定位、天气、健康与设备使用状态并实时上报，电脑端汇聚双端数据并落盘，MaiBot 插件把处境翻译成情境上下文，驱动 AI 伴侣「海月」在心率过高、下雨、导航结束等真实情境下结合人设主动关心——不是固定模板，是她自己生成的话。
+AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机端采集定位、天气、健康与设备使用状态并实时上报，电脑端汇聚双端数据并落盘，MaiBot 插件把处境翻译成情境上下文，驱动 AI 伴侣在心率过高、下雨等真实情境下结合人设主动关心。
 
 当前版本： **v1.0.0**
 
@@ -11,15 +11,17 @@ AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机
 | 能力 | 说明 |
 |------|------|
 | 手机端采集 | GPS/城市、天气（Open-Meteo，15 分钟缓存）、心率/步数/睡眠（Health Connect，计步传感器兜底）、前台应用、导航/通话/听歌状态 |
-| 电脑端采集 | 前台窗口标题/进程名、打游戏/导航状态判定（关键词表） |
-| 汇聚服务 | 双端数据合并（`/merged-data`）、手机在线判定（超时制）、内嵌 WebUI 仪表盘、收集装置异步落盘（队列 + 专用写盘线程，不阻塞请求路径） |
-| 触发规则 | 心率过高 / 步数达标 / 雨雪 / 高温 / 导航结束，五条规则独立开关与阈值配置，按规则键独立冷却（默认 30 分钟） |
+| 电脑端采集 | 前台窗口标题/进程名、打游戏状态判定（关键词表）、CPU/内存/磁盘硬件指标 |
+| 汇聚服务 | 双端数据合并（`/merged-data`）、手机在线判定（超时制）、内嵌 WebUI 仪表盘、SQLite 异步落盘 |
+| 触发规则 | 心率过高 / 步数达标 / 雨雪 / 高温，四条规则独立开关与阈值配置，按规则键独立冷却（默认 3 分钟） |
 | 主动说话 | 插件注入情境上下文（`append_context`）+ 请求 MaiBot 结合人设生成话术（`trigger_proactive`），文案零硬编码 |
-| 安静模式 | 导航中/通话中自动静默，不打扰 |
+| 安静模式 | 手机导航中/通话中自动静默，不打扰 |
 | 降级容错 | 全链路失败不中断：GPS→上次有效位置→IP 定位；Health Connect→计步传感器；上报失败只计数、按周期自然重试 |
 | 自诊断 | 手机端发送成功/失败计数、权限缺失警告、最近错误，仪表盘实时可见 |
 | 传输鉴权 | 共享 Token（`shared_token` / `source.token`）经 `X-Sensor-Token` 请求头校验，空串为不启用鉴权的兼容模式 |
 | 异地组网 | 手机与电脑不在同一局域网时，用 Tailscale / ZeroTier 虚拟局域网接入 |
+| 插件状态 | WebUI 实时显示插件连接状态（心跳机制） |
+| 数据管理 | 历史数据查询、统计、导出（JSON/CSV）、自动清理（保留 30 天） |
 
 ---
 
@@ -27,8 +29,8 @@ AI 伴侣感官系统（手机 App + 电脑控制台 + MaiBot 插件）。手机
 
 ```
 手机传感器/外部API → 周期采集（10s，失败占位值）→ HTTP POST /phone-data
-    → 控制台合并 + 在线判定 + 异步落盘 collected.jsonl
-    → 插件周期拉取 /merged-data（15s）→ 安静模式过滤 → 规则门控 + 冷却
+    → 控制台合并 + 在线判定 + SQLite 异步落盘
+    → 插件周期拉取 /merged-data（300ms）→ 安静模式过滤 → 规则门控 + 冷却
     → 注入情境上下文 → MaiBot 结合人设主动说话 → QQ
 ```
 
@@ -72,30 +74,28 @@ python server.py        # 纯服务；python app.py 为桌面窗口入口
 
 ## 配置
 
-**控制台** `config.json`（缺失自动生成默认值）：
+**控制台** `config.json`（缺失自动生成默认值，修改后自动热重载）：
 
 | 变量 | 说明 |
 |------|------|
 | `host` | 监听地址，默认 `0.0.0.0` |
 | `port` | 服务端口，默认 `821`（三端共识值） |
+| `computer_collect_enabled` | 是否启用电脑状态采集（前台窗口/进程/游戏），默认 `true` |
 | `computer_collect_interval` | 电脑状态采集间隔（毫秒），默认 `5000` |
 | `phone_timeout_ms` | 超过该时长未上报视为手机离线（毫秒），默认 `90000` |
 | `poll_interval` | WebUI 仪表盘轮询间隔（毫秒），默认 `5000` |
 | `shared_token` | 共享鉴权令牌，空串 = 不启用鉴权的兼容模式 |
 
-**插件** `config.toml`（六分节，关键可选项）：
+**插件** `config.toml`（四分节，关键可选项）：
 
 | 变量 | 说明 |
 |------|------|
 | `source.data_url` | 电脑端合并数据接口，默认 `http://localhost:821/merged-data` |
 | `source.token` | 与控制台 `shared_token` 一致的令牌；控制台未启用鉴权时留空 |
-| `source.fetch_interval` | 数据拉取间隔（毫秒），默认 `15000` |
+| `source.fetch_interval` | 数据拉取间隔（毫秒），默认 `300` |
 | `target.platform` / `chat_type` / `user_id` | 主动说话目标聊天流（默认 QQ 私聊） |
-| `proactive.cooldown_ms` | 同一触发条件的冷却时间（毫秒），默认 `1800000` |
-| `proactive.quiet_when_navigating` / `quiet_when_calling` | 导航中/通话中安静模式，默认开启 |
-| `rules.nav_end_enabled` | 导航结束问候开关（状态翻转检测，不进规则表） |
+| `proactive.cooldown_ms` | 同一触发条件的冷却时间（毫秒），默认 `180000`（3 分钟） |
 | `rules.table` | 声明式规则表：心率 ≥100 / 步数 ≥10000 / 降雨（受控词表）/ 高温 ≥35 ℃，逐条 `enabled` 开关与阈值 |
-| `persona.appellation` | 对用户的称呼（替换情境文案里的「哥哥」） |
 
 **手机端**：连接 IP / 端口 / 采集间隔 / Token 在 App 内配置；Android 明文 HTTP 依赖 Manifest 的 `usesCleartextTraffic="true"`（勿删）。
 
@@ -118,6 +118,10 @@ curl http://localhost:821/merged-data
 # 健康检查 / 仪表盘
 curl http://localhost:821/health
 # WebUI：浏览器打开 http://localhost:821/（exe 运行时自动弹出内嵌窗口）
+
+# 数据导出
+curl http://localhost:821/export/json -o export.json
+curl http://localhost:821/export/csv -o export.csv
 
 # 手机端 APK 源码编译
 cd Mizuki/android
@@ -154,14 +158,18 @@ start-tailscale.bat
 
 ## 数据结构
 
-采集数据落盘 `data/collected.jsonl`（与程序代码分目录，每行一个 JSON 对象）：
+采集数据落盘 `data/collected.db`（SQLite 数据库，与程序代码分目录）：
 
-```jsonl
-{"type":"phone","device_id":"V2270A","timestamp":"...","location":{...},"weather":{...},"health":{...},"usage":{...},"diagnostics":{...},"received_at":"..."}
-{"type":"computer","timestamp":"...","foreground_window":"Visual Studio Code","foreground_process":"Code.exe","is_gaming":false,"is_navigating":false}
+```sql
+CREATE TABLE records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,          -- "phone" 或 "computer"
+    timestamp TEXT NOT NULL,     -- ISO 8601 时间戳
+    data TEXT NOT NULL           -- JSON 格式完整数据
+);
 ```
 
-手机记录逐条落盘；电脑状态仅在关键值变化（前台窗口/进程/游戏/导航四元组）时落盘，避免刷屏。数据契约（`/phone-data` 五段结构、`/merged-data` 合并结构、受控天气词表）见 `.docs/architecture.md` §2。
+手机记录逐条落盘；电脑状态仅在关键值变化（前台窗口/进程/游戏三元组）时落盘，避免刷屏。数据自动清理（保留 30 天）。数据契约（`/phone-data` 五段结构、`/merged-data` 合并结构、受控天气词表）见 `.docs/architecture.md` §2。
 
 ---
 
@@ -171,11 +179,18 @@ start-tailscale.bat
 Mizuki/
 ├── README.md                    # 本文档
 ├── LICENSE                      # GPL-3.0 全文
+├── .editorconfig                # 编辑器配置
+├── .docs/
+│   ├── architecture.md          # 架构规格
+│   └── CHANGELOG.md             # 变更日志
 ├── Mizuki/                      # 源码根目录
 │   ├── android/                 # Android 手机端
 │   ├── desktop/                 # 电脑端源码
 │   └── plugin/                  # MaiBot 插件
 ├── test/                        # 自动化测试
+├── Release/                     # 构建产物归档
+│   ├── apk/                     # 手机端 APK
+│   └── exe/                     # 控制台发行目录
 └── start-tailscale.bat          # 异地组网脚本
 ```
 
@@ -186,7 +201,7 @@ Mizuki/
 - **手机端**：Kotlin 1.9.24、OkHttp、Gson、Google Fused Location、Health Connect、Leaflet
 - **电脑端**：FastAPI、uvicorn、psutil、pywin32、pywebview、pystray、Pillow、PyInstaller
 - **插件**：maibot_sdk 2.5+、httpx、asyncio
-- **数据**：JSON over HTTP，落盘 JSONL
+- **数据**：JSON over HTTP，落盘 SQLite（WAL 模式）
 - **构建**：AGP 8.4.2 + Gradle 8.7 + JDK 21；Python 3.13
 
 ---
@@ -194,7 +209,7 @@ Mizuki/
 ## 验证
 
 ```bash
-# 运行自动化测试
+# 运行自动化测试（32 个用例覆盖全部 API 接口）
 py -m pytest test/ -v
 ```
 

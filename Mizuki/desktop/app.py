@@ -1,4 +1,4 @@
-"""海月感知（Mizuki）· 控制台 — 电脑端汇聚服务（内嵌 WebUI + 系统托盘后台运行）
+"""Mizuki · 控制台 — 电脑端汇聚服务（内嵌 WebUI + 系统托盘后台运行）
 
 双击运行后：
 - 在后台启动汇聚服务（HTTP 服务 + 电脑状态采集 + 异步落盘）
@@ -62,7 +62,7 @@ def _acquire_single_instance_lock() -> bool:
 def main() -> None:
     """桌面入口：内嵌窗口 + 系统托盘，服务在后台持续运行。"""
     if not _acquire_single_instance_lock():
-        ctypes.windll.user32.MessageBoxW(0, "海月感知控制台已在运行中。", "海月感知", 0x40)
+        ctypes.windll.user32.MessageBoxW(0, "海月之音控制台已在运行中。", "海月之音", 0x40)
         sys.exit(0)
     _redirect_logs()
     start_services()

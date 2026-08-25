@@ -134,14 +134,14 @@ class TestPhoneData:
         assert body["phone_connected"] is True
 
     def test_phone_data_recorded_to_storage(self, client, tmp_path):
+        import server
         client.post("/phone-data", json=PHONE_PAYLOAD)
-        # 等写盘线程完成
+        # 等写入完成
         time.sleep(0.5)
-        data_file = tmp_path / "data" / "collected.jsonl"
-        assert data_file.exists()
-        lines = data_file.read_text(encoding="utf-8").strip().splitlines()
-        assert len(lines) >= 1
-        record = json.loads(lines[-1])
+        # 验证数据已写入 SQLite
+        records = server.storage.query(record_type="phone", limit=1)
+        assert len(records) >= 1
+        record = json.loads(records[0]["data"])
         assert record["type"] == "phone"
         assert record["device_id"] == "test-device"
 
@@ -271,7 +271,6 @@ class TestComputerCollectToggle:
         state = client.get("/api/state").json()
         assert "foreground_window" not in state["computer"]
         assert "is_gaming" not in state["computer"]
-        assert "is_navigating" not in state["computer"]
 
         # 恢复启用
         client.patch("/api/config", json={"computer_collect_enabled": True})

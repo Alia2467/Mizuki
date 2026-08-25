@@ -1,4 +1,4 @@
-"""海月感知（Mizuki）— 电脑端状态采集器
+"""Mizuki — 电脑端状态采集器
 
 负责周期性地采集电脑当前状态：
 - 前台窗口标题 / 进程名
@@ -52,16 +52,6 @@ GAME_KEYWORDS: tuple[str, ...] = (
     "永劫无间",
     "cs2",
     "counter-strike",
-)
-
-# 导航窗口标题关键词（小写匹配）
-NAVIGATION_KEYWORDS: tuple[str, ...] = (
-    "高德",
-    "百度地图",
-    "腾讯地图",
-    "google maps",
-    "导航",
-    "地图",
 )
 
 
@@ -119,7 +109,6 @@ class ComputerCollector:
             "foreground_window": title,
             "foreground_process": process,
             "is_gaming": self._contains_any(process, GAME_KEYWORDS),
-            "is_navigating": self._contains_any(title, NAVIGATION_KEYWORDS),
         }
 
     def _local_ip(self) -> str:

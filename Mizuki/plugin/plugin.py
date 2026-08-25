@@ -1,4 +1,4 @@
-"""海月感知插件（Mizuki）— MaiBot 主动感知（决策执行层）
+"""Mizuki 插件 — MaiBot 主动感知（决策执行层）
 
 职责：
 - 周期从电脑端汇聚服务拉取合并数据（手机 + 电脑状态）
@@ -125,7 +125,7 @@ class RulesConfig(PluginConfigBase):
 
 
 class MizukiSensorConfig(PluginConfigBase):
-    """海月感知插件总配置。"""
+    """Mizuki 插件总配置。"""
 
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     source: SourceConfig = Field(default_factory=SourceConfig)
@@ -140,7 +140,7 @@ class MizukiSensorConfig(PluginConfigBase):
 
 
 class MizukiSensorPlugin(MaiBotPlugin):
-    """海月感知插件。"""
+    """Mizuki 插件。"""
 
     config_model = MizukiSensorConfig
 
@@ -148,7 +148,6 @@ class MizukiSensorPlugin(MaiBotPlugin):
         super().__init__()
         self._loop_task: asyncio.Task | None = None
         self._stream_id: str = ""
-        self._last_navigating: bool = False
         self._last_spoken: dict[str, float] = {}
         self._connection_status: str = "unknown"
         self._http_client: httpx.AsyncClient | None = None
@@ -165,7 +164,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
     # 生命周期
     # ------------------------------------------------------------------
     async def on_load(self) -> None:
-        self._get_logger().info("海月感知插件已加载")
+        self._get_logger().info("Mizuki 插件已加载")
         # 启动时检测连接状态
         await self._test_connection()
         # 启动心跳上报
@@ -191,7 +190,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
             self._http_client = None
         self._loop_task = None
         self._heartbeat_task = None
-        self._get_logger().info("海月感知插件已卸载")
+        self._get_logger().info("Mizuki 插件已卸载")
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
         del config_data
@@ -199,7 +198,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
         self._stream_id = ""
         # 配置更新后重新检测连接
         await self._test_connection()
-        self._get_logger().info("海月感知配置已更新: scope=%s version=%s", scope, version)
+        self._get_logger().info("Mizuki 配置已更新: scope=%s version=%s", scope, version)
 
     # ------------------------------------------------------------------
     # 连接检测
@@ -257,7 +256,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._get_logger().error("海月感知主循环异常: %s", exc)
+                self._get_logger().error("Mizuki 主循环异常: %s", exc)
             await asyncio.sleep(int(self.config.source.fetch_interval) / 1000)
 
     async def _tick(self) -> None:
@@ -271,21 +270,9 @@ class MizukiSensorPlugin(MaiBotPlugin):
 
         phone = data.get("phone") or {}
         usage = phone.get("usage") or {}
-        computer = data.get("computer") or {}
 
-        is_navigating = bool(usage.get("is_navigating") or computer.get("is_navigating"))
+        is_navigating = bool(usage.get("is_navigating"))
         is_calling = bool(usage.get("is_calling"))
-
-        # 导航结束检测（nav_end）
-        if self._last_navigating and not is_navigating:
-            await self._proactive(
-                stream_id,
-                "nav_end",
-                "刚刚结束了导航，应该到达目的地了。",
-                "刚结束导航（可能到家了），结合你的身份温柔地问候 TA、关心 TA 是否累了。",
-            )
-
-        self._last_navigating = is_navigating
 
         # 安静模式：导航中/通话中不说话
         if is_navigating or is_calling:
@@ -321,8 +308,8 @@ class MizukiSensorPlugin(MaiBotPlugin):
             # 顺序是硬约束：先注入情境让海月“看见”发生了什么，再请求她主动说话
             await self.ctx.maisaka.append_context(
                 stream_id,
-                [{"type": "text", "content": f"[海月感知] {situation}"}],
-                visible_text=f"[海月感知] {situation}",
+                [{"type": "text", "content": f"[海月之音] {situation}"}],
+                visible_text=f"[海月之音] {situation}",
                 source_kind="plugin:Mizuki_sensor",
                 message_id=f"Mizuki-sensor:{trigger_key}:{int(time.time())}",
             )
@@ -462,5 +449,5 @@ def _extract_stream_id(result: Any) -> str:
 
 
 def create_plugin() -> MizukiSensorPlugin:
-    """创建海月感知插件实例。"""
+    """创建 Mizuki 插件实例。"""
     return MizukiSensorPlugin()

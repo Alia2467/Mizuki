@@ -13,7 +13,7 @@
     <header class="topbar">
       <div class="brand">
         <div>
-          <h1 class="brand-title">海月感知</h1>
+          <h1 class="brand-title">海月之音</h1>
         </div>
       </div>
       <div class="topbar-right">
@@ -163,6 +163,22 @@
         </div>
       </section>
     </main>
+
+    <!-- 历史数据（全宽） -->
+    <section class="card card--span2" id="card-history">
+      <div class="card-head">
+        <h2>📊 历史数据</h2>
+        <div class="history-tabs">
+          <button class="history-tab active" data-metric="heart_rate">心率</button>
+          <button class="history-tab" data-metric="steps">步数</button>
+        </div>
+      </div>
+      <div class="history-chart" id="history-chart">
+        <div class="history-bars" id="history-bars"></div>
+        <div class="history-labels" id="history-labels"></div>
+      </div>
+      <div class="history-empty" id="history-empty">暂无数据</div>
+    </section>
 
     <!-- 上传日志（全宽） -->
     <section class="logs logs--full">

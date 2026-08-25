@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">海月感知</string>
-    <string name="brand_name">海月感知</string>
+    <string name="app_name">海月之音</string>
+    <string name="brand_name">海月之音</string>
     <string name="status_not_connected">未连接</string>
     <string name="status_connected">已连接</string>
     <string name="tab_home">首页</string>

@@ -52,4 +52,19 @@
     <string name="note_content">笔记内容</string>
     <string name="note_title">笔记标题</string>
     <string name="category_name">分类名称</string>
+
+    <!-- 导航与音乐 App 包名列表（可配置，新增 App 无需发版） -->
+    <string-array name="nav_packages">
+        <item>com.autonavi.minimap</item>
+        <item>com.baidu.BaiduMap</item>
+        <item>com.tencent.map</item>
+        <item>com.google.android.apps.maps</item>
+    </string-array>
+    <string-array name="music_packages">
+        <item>com.netease.cloudmusic</item>
+        <item>com.tencent.qqmusic</item>
+        <item>com.kugou.android</item>
+        <item>com.spotify.music</item>
+        <item>com.apple.android.music</item>
+    </string-array>
 </resources>

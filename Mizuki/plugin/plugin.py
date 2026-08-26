@@ -244,7 +244,7 @@ class MizukiSensorPlugin(MaiBotPlugin):
                 await self._http.post(heartbeat_url, json={"plugin_id": "mizuki-sensor"}, headers=headers)
             except Exception:
                 pass  # 心跳失败不影响主功能
-            await asyncio.sleep(30)
+            await asyncio.sleep(3)
 
     # ------------------------------------------------------------------
     # 主循环
@@ -281,50 +281,51 @@ class MizukiSensorPlugin(MaiBotPlugin):
         await self._evaluate_rules(stream_id, data)
 
     async def _evaluate_rules(self, stream_id: str, data: dict[str, Any]) -> None:
-        """按声明式规则表顺序求值，首个命中的规则触发后即结束本轮。"""
+        """按声明式规则表顺序求值，收集所有命中规则合并注入上下文并触发主动说话。"""
+        matched = []
         for rule in self.config.rules.table:
             if not rule.enabled or not rule.key or not rule.field:
                 continue
             actual = _extract_field(data, rule.field)
             if actual is None or not _compare(actual, rule.op, rule.value):
                 continue
-            await self._proactive(
-                stream_id,
-                rule.key,
-                _format_template(rule.situation, actual),
-                _format_template(rule.intent, actual),
-            )
+            # 冷却检查：冷却期内跳过但不中断后续规则
+            if not self._can_speak(rule.key):
+                continue
+            matched.append((rule.key, rule, actual))
+        if not matched:
             return
+        # 所有命中规则的情境合并注入
+        situations = []
+        intents = []
+        for trigger_key, rule, actual in matched:
+            situations.append(_format_template(rule.situation, actual))
+            intents.append(_format_template(rule.intent, actual))
+            self._last_spoken[trigger_key] = time.time()
+        combined_situation = " ".join(situations)
+        combined_intent = " ".join(intents)
+        try:
+            await self.ctx.maisaka.append_context(
+                stream_id,
+                [{"type": "text", "content": f"[海月之音] {combined_situation}"}],
+                visible_text=f"[海月之音] {combined_situation}",
+                source_kind="plugin:Mizuki_sensor",
+                message_id=f"Mizuki-sensor:multi:{int(time.time())}",
+            )
+            result = await self.ctx.maisaka.trigger_proactive(
+                stream_id,
+                combined_intent,
+                reason=f"触发规则:{','.join(k for k, _, _ in matched)}",
+                priority="normal",
+                metadata={"triggers": [k for k, _, _ in matched]},
+            )
+            self._get_logger().info("海月主动说话已触发: %s → %s", [k for k, _, _ in matched], result)
+        except Exception as exc:
+            self._get_logger().error("触发主动说话失败: %s", exc)
 
     # ------------------------------------------------------------------
     # 主动说话
     # ------------------------------------------------------------------
-    async def _proactive(self, stream_id: str, trigger_key: str, situation: str, intent: str) -> None:
-        """注入情境上下文，并请求 MaiBot 主动说话。"""
-        if not self._can_speak(trigger_key):
-            return
-
-        try:
-            # 顺序是硬约束：先注入情境让海月“看见”发生了什么，再请求她主动说话
-            await self.ctx.maisaka.append_context(
-                stream_id,
-                [{"type": "text", "content": f"[海月之音] {situation}"}],
-                visible_text=f"[海月之音] {situation}",
-                source_kind="plugin:Mizuki_sensor",
-                message_id=f"Mizuki-sensor:{trigger_key}:{int(time.time())}",
-            )
-            result = await self.ctx.maisaka.trigger_proactive(
-                stream_id,
-                intent,
-                reason=f"触发规则:{trigger_key}",
-                priority="normal",
-                metadata={"trigger": trigger_key},
-            )
-            self._last_spoken[trigger_key] = time.time()
-            self._get_logger().info("海月主动说话已触发: %s → %s", trigger_key, result)
-        except Exception as exc:
-            self._get_logger().error("触发主动说话失败 (%s): %s", trigger_key, exc)
-
     def _can_speak(self, trigger_key: str) -> bool:
         last = self._last_spoken.get(trigger_key)
         if last is None:

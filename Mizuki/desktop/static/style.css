@@ -166,7 +166,7 @@ html.dark body::before {
 .status-pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   padding: 7px 14px;
   border-radius: 999px;
   background: var(--accent-soft);
@@ -212,6 +212,10 @@ html.dark body::before {
 
 .card--span2 {
   grid-column: span 2;
+}
+
+#card-history {
+  margin-top: 1.5vh;
 }
 
 .card-head {
@@ -614,6 +618,40 @@ html.dark body::before {
 
 .btn-save:hover {
   opacity: 0.85;
+}
+
+/* ---------- 数据导出 ---------- */
+#card-export {
+  margin-bottom: 1.5vh;
+}
+
+.export-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-export {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-export:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.export-msg {
+  font-size: 12px;
+  color: var(--ok);
+  margin-left: 4px;
 }
 
 .btn-close {

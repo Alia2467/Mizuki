@@ -28,8 +28,8 @@ class TestConfig:
         assert resp.status_code == 200
         body = resp.json()
         assert body["port"] == 821
-        assert body["computer_collect_interval"] == 5000
-        assert body["phone_timeout_ms"] == 90000
+        assert body["computer_collect_interval"] == 300
+        assert body["phone_timeout_ms"] == 10000
         assert body["poll_interval"] == 5000
         assert body["auth_enabled"] is False
 
@@ -61,7 +61,7 @@ class TestConfig:
     def test_patch_config_clamps_minimum(self, client):
         resp = client.patch("/api/config", json={"computer_collect_interval": 0})
         assert resp.status_code == 200
-        assert client.get("/api/config").json()["computer_collect_interval"] == 300
+        assert client.get("/api/config").json()["computer_collect_interval"] == 100
 
     def test_patch_config_persists(self, client, tmp_path):
         client.patch("/api/config", json={"phone_timeout_ms": 200000})
@@ -226,7 +226,7 @@ class TestOfflineDetection:
         client.post("/phone-data", json=PHONE_PAYLOAD)
         assert client.get("/health").json()["phone_connected"] is True
 
-        # 设置极短的超时阈值（300ms 是最低钳制值）
+        # 设置极短的超时阈值（最低钳制值 100ms，这里用 300ms 便于测试）
         client.patch("/api/config", json={"phone_timeout_ms": 300})
         # 等待超时
         time.sleep(0.5)

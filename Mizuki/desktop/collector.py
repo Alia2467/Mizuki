@@ -10,10 +10,13 @@ Windows 下使用 win32gui + psutil；其他平台优雅降级为占位值。
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from datetime import datetime
 from typing import Any
+
+_logger = logging.getLogger("mizuki.computer")
 
 try:
     import psutil
@@ -66,6 +69,7 @@ class ComputerCollector:
         self._thread: threading.Thread | None = None
         self._local_ip_cache: str = ""
         self._local_ip_time: float = 0
+        self.collect_foreground = True  # 前台采集开关（与 config.computer_collect_enabled 同步）
 
     # ------------------------------------------------------------------
     # 采集逻辑
@@ -100,7 +104,13 @@ class ComputerCollector:
             "local_ip": self._local_ip(),
         }
         data.update(self._snapshot_hardware())
+        if self.collect_foreground:
+            data.update(self._snapshot_foreground())
         return data
+
+    def _snapshot_foreground(self) -> dict[str, Any]:
+        """采集前台窗口/进程/游戏/导航状态（受 collect_foreground 控制）。"""
+        return self.snapshot_foreground()
 
     def snapshot_foreground(self) -> dict[str, Any]:
         """采集前台窗口/进程/游戏/导航状态（受 computer_collect_enabled 控制）。"""
@@ -157,7 +167,7 @@ class ComputerCollector:
                 with self._lock:
                     self._data = data
             except Exception as exc:  # 采集异常不应终止线程
-                print(f"[电脑状态采集器] 采集失败: {exc}")
+                _logger.error("[电脑状态采集器] 采集失败: %s", exc)
             self._stop.wait(self.interval)
 
     def start(self) -> None:

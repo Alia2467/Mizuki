@@ -10,12 +10,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger("mizuki.database")
 
 DEFAULT_DB_FILE = Path(__file__).resolve().parent / "data" / "collected.db"
 DEFAULT_RETENTION_DAYS = 30  # 数据保留天数
@@ -36,6 +39,7 @@ class DataCollector:
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._cleanup_loop, daemon=True, name="data-cleanup")
         self._started = False
+        self._last_record_time: datetime | None = None
 
     def start(self) -> None:
         """启动数据库连接和清理线程。"""
@@ -47,6 +51,11 @@ class DataCollector:
         self._create_tables()
         self._thread.start()
         self._started = True
+
+    @property
+    def last_record_time(self) -> datetime | None:
+        """返回最近一次成功写入的时间。"""
+        return self._last_record_time
 
     def stop(self) -> None:
         """停止清理线程并关闭数据库。"""
@@ -69,8 +78,9 @@ class DataCollector:
                     (record.get("type", "unknown"), record.get("timestamp", datetime.now().isoformat()), json.dumps(record, ensure_ascii=False)),
                 )
                 self._conn.commit()
+            self._last_record_time = datetime.now()
         except Exception as exc:
-            print(f"[database] 写入失败: {exc}")
+            _logger.error("[database] 写入失败: %s", exc)
 
     def query(
         self,
@@ -183,6 +193,6 @@ class DataCollector:
             try:
                 deleted = self.cleanup()
                 if deleted > 0:
-                    print(f"[database] 清理过期数据 {deleted} 条")
+                    _logger.info("[database] 清理过期数据 %d 条", deleted)
             except Exception as exc:
-                print(f"[database] 清理失败: {exc}")
+                _logger.error("[database] 清理失败: %s", exc)

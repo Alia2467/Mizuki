@@ -77,7 +77,9 @@ class SensorService : Service(), SensorEventListener {
 
     private var targetUrl = ""
     private var authToken = ""
-    private var intervalMs = 10000
+    private var intervalMs = 300
+    private var baseIntervalMs = 300  // 用户配置的基准间隔（退避恢复后回到此值）
+    private var backoffMultiplier = 1  // 指数退避倍数（1 = 正常间隔）
     private var stepBaseline = -1L
     private var lastSteps = 0L
 
@@ -102,10 +104,16 @@ class SensorService : Service(), SensorEventListener {
     /** Health Connect 客户端缓存（懒初始化，避免每次 fetchHealth 重复创建）。 */
     private var healthConnectClient: HealthConnectClient? = null
 
+    /** 导航/音乐 App 包名集合（从资源加载，可配置）。 */
+    private var navPackages: Set<String> = emptySet()
+    private var musicPackages: Set<String> = emptySet()
+
     private val collectRunnable = object : Runnable {
         override fun run() {
             collectAndSend()
-            handler.postDelayed(this, intervalMs.toLong())
+            // 指数退避：连续失败时拉长间隔，上限 MAX_BACKOFF_MULTIPLIER
+            val nextInterval = baseIntervalMs * backoffMultiplier
+            handler.postDelayed(this, nextInterval)
         }
     }
 
@@ -118,12 +126,17 @@ class SensorService : Service(), SensorEventListener {
         stepCounter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
         stepCounter?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
         startForeground()
+        // 从资源加载包名集合（可配置）
+        navPackages = resources.getStringArray(R.array.nav_packages).toSet()
+        musicPackages = resources.getStringArray(R.array.music_packages).toSet()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val ip = intent?.getStringExtra(EXTRA_IP) ?: DEFAULT_IP
         val port = intent?.getIntExtra(EXTRA_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
-        intervalMs = (intent?.getIntExtra(EXTRA_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL).coerceAtLeast(300)
+        intervalMs = (intent?.getIntExtra(EXTRA_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL).coerceAtLeast(100)
+        baseIntervalMs = intervalMs
+        backoffMultiplier = 1
         authToken = intent?.getStringExtra(EXTRA_TOKEN) ?: ""
         targetUrl = "http://$ip:$port/phone-data"
         Log.i(TAG, "开始采集 → $targetUrl，间隔 ${intervalMs}ms")
@@ -329,18 +342,25 @@ class SensorService : Service(), SensorEventListener {
                 lastError = e.message ?: "连接失败"
                 Log.e(TAG, "上报失败: $lastError")
                 consecutiveFailures++
-                if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                    Log.e(TAG, "连续失败 $consecutiveFailures 次，自动停服")
-                    stopSelf()
+                // 指数退避：连续失败时加倍间隔（上限 MAX_BACKOFF_MULTIPLIER），不停止服务
+                if (backoffMultiplier < MAX_BACKOFF_MULTIPLIER) {
+                    backoffMultiplier *= 2
+                    Log.w(TAG, "连续失败 $consecutiveFailures 次，退避倍数 ×$backoffMultiplier（间隔 ${baseIntervalMs * backoffMultiplier}ms）")
                 } else {
-                    pendingStore.enqueue(json)
+                    Log.e(TAG, "连续失败 $consecutiveFailures 次，已达最大退避")
                 }
+                pendingStore.enqueue(json)
             }
 
             override fun onResponse(call: Call, response: Response) {
                 if (response.isSuccessful) {
                     sendSuccess++
-                    consecutiveFailures = 0
+                    // 成功时重置退避
+                    if (consecutiveFailures > 0 || backoffMultiplier > 1) {
+                        consecutiveFailures = 0
+                        backoffMultiplier = 1
+                        Log.i(TAG, "连接恢复，重置退避")
+                    }
                     Log.d(TAG, "上报成功")
                     sendPending()
                 } else {
@@ -352,9 +372,9 @@ class SensorService : Service(), SensorEventListener {
                         Log.e(TAG, "永久拒收，不累计连续失败")
                     } else {
                         consecutiveFailures++
-                        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-                            Log.e(TAG, "连续失败 $consecutiveFailures 次，自动停服")
-                            stopSelf()
+                        if (backoffMultiplier < MAX_BACKOFF_MULTIPLIER) {
+                            backoffMultiplier *= 2
+                            Log.w(TAG, "连续失败 $consecutiveFailures 次，退避倍数 ×$backoffMultiplier")
                         }
                     }
                     if (!isPermanentReject(response.code)) pendingStore.enqueue(json)
@@ -589,24 +609,11 @@ class SensorService : Service(), SensorEventListener {
 
     private fun isNavigationPackage(packageName: String): Boolean {
         if (packageName.isEmpty()) return false
-        val navPackages = setOf(
-            "com.autonavi.minimap",       // 高德地图
-            "com.baidu.BaiduMap",         // 百度地图
-            "com.tencent.map",            // 腾讯地图
-            "com.google.android.apps.maps" // Google Maps
-        )
         return packageName in navPackages
     }
 
     private fun isMusicPackage(packageName: String): Boolean {
         if (packageName.isEmpty()) return false
-        val musicPackages = setOf(
-            "com.netease.cloudmusic",     // 网易云音乐
-            "com.tencent.qqmusic",        // QQ音乐
-            "com.kugou.android",          // 酷狗音乐
-            "com.spotify.music",          // Spotify
-            "com.apple.android.music"     // Apple Music
-        )
         return packageName in musicPackages
     }
 
@@ -737,13 +744,13 @@ class SensorService : Service(), SensorEventListener {
         /** 连接默认值：各页面占位/兜底的唯一数据源，禁止另处重复字面量。 */
         const val DEFAULT_IP = "192.168.1.4"
         const val DEFAULT_PORT = 821
-        const val DEFAULT_INTERVAL = 10000
+        const val DEFAULT_INTERVAL = 300
 
         private const val NOTIFICATION_ID = 1
         private const val TAG = "MizukiSensor"
 
-        /** 连续失败达此次数后自动停服，避免无限空转（遵循「降级胜于中断」）。 */
-        private const val MAX_CONSECUTIVE_FAILURES = 5
+        /** 指数退避最大倍数：连续失败时隔隔翻倍，上限此值（默认间隔 300ms × 8 = 最长 2.4s）。 */
+        private const val MAX_BACKOFF_MULTIPLIER = 8
 
         /** 最近一次采集到的完整数据（供状态页展示）。 */
         @Volatile

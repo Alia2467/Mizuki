@@ -334,6 +334,28 @@
     });
   });
 
+  // 数据导出
+  document.getElementById("export-json").addEventListener("click", function () {
+    window.location.href = "/api/export/json";
+    showExportMsg("已开始下载 JSON");
+  });
+  document.getElementById("export-csv").addEventListener("click", function () {
+    window.location.href = "/api/export/csv";
+    showExportMsg("已开始下载 CSV");
+  });
+
+  // 顶栏导出按钮：切换导出卡片显示
+  var exportCard = document.getElementById("card-export");
+  document.getElementById("export-toggle-btn").addEventListener("click", function () {
+    exportCard.style.display = exportCard.style.display === "none" ? "block" : "none";
+  });
+
+  function showExportMsg(text) {
+    var msg = document.getElementById("export-msg");
+    msg.textContent = text;
+    setTimeout(function () { msg.textContent = ""; }, 3000);
+  }
+
   // 设置面板
   var settingsCard = document.getElementById("settings-card");
   document.getElementById("settings-btn").addEventListener("click", function () {

@@ -86,8 +86,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "host": "0.0.0.0",
     "port": 821,
     "computer_collect_enabled": True,  # 是否启用电脑状态采集（前台窗口/进程/游戏/导航）
-    "computer_collect_interval": 5000,  # 电脑状态采集间隔（毫秒）
-    "phone_timeout_ms": 90000,  # 超过该时长未上报视为手机离线（毫秒）
+    "computer_collect_interval": 300,  # 电脑状态采集间隔（毫秒）
+    "phone_timeout_ms": 10000,  # 超过该时长未上报视为手机离线（毫秒）
     "poll_interval": 5000,  # WebUI 仪表盘轮询间隔（毫秒）
     "shared_token": "",  # 共享鉴权 token；空串表示不启用鉴权（兼容模式）
 }
@@ -145,6 +145,45 @@ class PhoneData(BaseModel):
     usage: UsageData = UsageData()
     diagnostics: dict[str, Any] = {}
 
+# ----------------------------------------------------------------------
+# 速率限制（简单滑动窗口，按 IP 限流）
+# ----------------------------------------------------------------------
+_rate_lock = threading.Lock()
+_rate_windows: dict[str, list[float]] = {}
+_RATE_LIMITS: dict[str, tuple[int, float]] = {
+    "/phone-data": (60, 60.0),    # 60 次/分钟
+    "/merged-data": (500, 60.0),  # 500 次/分钟（插件高频轮询）
+    "default": (120, 60.0),       # 默认 120 次/分钟
+}
+
+
+def _is_rate_limited(client_ip: str, path: str) -> bool:
+    """检查是否超出速率限制。返回 True 表示应拒绝。"""
+    now = time.time()
+    limit, window = _RATE_LIMITS.get(path, _RATE_LIMITS["default"])
+    key = f"{client_ip}:{path}"
+    with _rate_lock:
+        timestamps = _rate_windows.setdefault(key, [])
+        # 清理过期记录
+        cutoff = now - window
+        timestamps[:] = [t for t in timestamps if t > cutoff]
+        if len(timestamps) >= limit:
+            return True
+        timestamps.append(now)
+        return False
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """全局速率限制中间件。"""
+    # 只对数据端点限流
+    path = request.url.path
+    if path in _RATE_LIMITS:
+        client_ip = request.client.host if request.client else "unknown"
+        if _is_rate_limited(client_ip, path):
+            return JSONResponse({"status": "error", "message": "请求过于频繁，请稍后再试"}, status_code=429)
+    return await call_next(request)
+
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # ----------------------------------------------------------------------
@@ -168,6 +207,13 @@ def load_config() -> dict[str, Any]:
     return dict(DEFAULT_CONFIG)
 
 
+def _resolve_effective_token() -> str:
+    """解析有效 Token：环境变量 MIZUKI_TOKEN 优先于 config.json。"""
+    import os
+    env_token = os.environ.get("MIZUKI_TOKEN", "").strip()
+    return env_token if env_token else config.get("shared_token", "")
+
+
 def save_config() -> None:
     """将当前配置写入 config.json。"""
     CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -179,7 +225,7 @@ storage = DataCollector(db_file=app_dir() / "data" / "collected.db")  # 收集�
 
 # 插件心跳追踪（plugin_id -> 最后心跳时间）
 _plugin_heartbeats: dict[str, datetime] = {}
-_PLUGIN_HEARTBEAT_TIMEOUT = 60  # 秒，超过此时间未心跳视为离线
+_PLUGIN_HEARTBEAT_TIMEOUT = 10  # 秒，超过此时间未心跳视为离线
 
 
 # ----------------------------------------------------------------------
@@ -189,8 +235,30 @@ def _iso_now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+# ----------------------------------------------------------------------
+# 结构化日志（统一入口，便于后续扩展为文件日志）
+# ----------------------------------------------------------------------
+import logging
+
+_logger = logging.getLogger("mizuki")
+
+
+def _log(level: str, message: str) -> None:
+    """统一日志入口，带级别与线程名。"""
+    thread_name = threading.current_thread().name
+    formatted = f"[{thread_name}] {message}"
+    if level == "error":
+        _logger.error(formatted)
+    elif level == "warning":
+        _logger.warning(formatted)
+    elif level == "debug":
+        _logger.debug(formatted)
+    else:
+        _logger.info(formatted)
+
+
 def _auth_enabled() -> bool:
-    return bool(config.get("shared_token"))
+    return bool(_resolve_effective_token())
 
 
 def _reject_unauthorized() -> JSONResponse:
@@ -201,7 +269,7 @@ def _check_token(request: Request) -> JSONResponse | None:
     """校验共享 token；未启用鉴权或校验通过返回 None，否则返回 401 响应。"""
     if not _auth_enabled():
         return None
-    if request.headers.get(TOKEN_HEADER) != config["shared_token"]:
+    if request.headers.get(TOKEN_HEADER) != _resolve_effective_token():
         return _reject_unauthorized()
     return None
 
@@ -211,10 +279,14 @@ _last_computer_key: tuple[Any, ...] | None = None
 
 
 def _computer_persistence_loop() -> None:
-    """后台线程：电脑状态发生变化时，把快照交给收集装置落盘。"""
+    """后台线程：电脑状态前台三元组发生变化时，把快照交给收集装置落盘。"""
     global _last_computer_key
     while True:
         try:
+            # 运行时也可通过热重载关闭前台采集，线程不退出
+            if not config.get("computer_collect_enabled", True):
+                time.sleep(config["computer_collect_interval"] / 1000)
+                continue
             data = collector.get_or_empty()
             if not data:
                 time.sleep(config["computer_collect_interval"] / 1000)
@@ -228,7 +300,7 @@ def _computer_persistence_loop() -> None:
                 _last_computer_key = key
                 storage.record({"type": "computer", **data})
         except Exception as exc:
-            print(f"[电脑状态采集] 异常: {exc}")
+            _log("error", f"[电脑状态采集] 异常: {exc}")
         # 间隔唯一数据源是 config；落盘比对与采集器共用同一配置项
         time.sleep(config["computer_collect_interval"] / 1000)
 
@@ -248,10 +320,8 @@ def _build_state() -> dict[str, Any]:
         with _state_lock:
             phone = dict(_latest_phone)
             phone_last_seen = _phone_received_at.isoformat(timespec="seconds") if _phone_received_at else None
-        # 硬件检测始终运行，前台窗口/进程/游戏/导航受开关控制
+        # collector.get() 已包含硬件 + 前台（受 collect_foreground 控制）
         computer = collector.get()
-        if config.get("computer_collect_enabled", True):
-            computer.update(_collector_foreground_snapshot())
         return {
             "timestamp": _iso_now(),
             "phone": phone,
@@ -265,7 +335,7 @@ def _build_state() -> dict[str, Any]:
             },
         }
     except Exception as exc:
-        print(f"[_build_state] 异常: {exc}")
+        _log("error", f"[_build_state] 异常: {exc}")
         traceback.print_exc()
         return {
             "timestamp": _iso_now(),
@@ -307,6 +377,50 @@ async def health() -> dict[str, Any]:
     return {"status": "ok", "version": VERSION, "phone_connected": _phone_is_online()}
 
 
+@app.get("/health/deep")
+async def health_deep() -> JSONResponse:
+    """深度健康检查（数据库、采集器、插件状态）。"""
+    now = datetime.now()
+
+    # 数据库状态
+    db_healthy = storage._conn is not None
+    db_last_write = storage.last_record_time
+    db_lag_seconds: int | None = None
+    if db_last_write:
+        db_lag_seconds = int((now - db_last_write).total_seconds())
+
+    # 采集器线程状态
+    collector_alive = collector._thread is not None and collector._thread.is_alive()
+
+    # 插件心跳状态
+    plugins_online = 0
+    plugins_total = len(_plugin_heartbeats)
+    for last_beat in _plugin_heartbeats.values():
+        if (now - last_beat).total_seconds() < _PLUGIN_HEARTBEAT_TIMEOUT:
+            plugins_online += 1
+
+    overall_healthy = db_healthy and collector_alive
+
+    return JSONResponse({
+        "status": "ok" if overall_healthy else "degraded",
+        "version": VERSION,
+        "phone_connected": _phone_is_online(),
+        "database": {
+            "connected": db_healthy,
+            "last_write": db_last_write.isoformat(timespec="seconds") if db_last_write else None,
+            "lag_seconds": db_lag_seconds,
+        },
+        "collector": {
+            "alive": collector_alive,
+            "collect_foreground": collector.collect_foreground,
+        },
+        "plugins": {
+            "online": plugins_online,
+            "total": plugins_total,
+        },
+    })
+
+
 @app.get("/api/state")
 async def api_state() -> JSONResponse:
     """仪表盘轮询用的完整状态。"""
@@ -344,7 +458,7 @@ async def merged_data(request: Request) -> JSONResponse:
     try:
         return JSONResponse(_merged_data())
     except Exception as exc:
-        print(f"[merged-data] 异常: {exc}")
+        _log("error", f"[merged-data] 异常: {exc}")
         traceback.print_exc()
         return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
 
@@ -361,6 +475,7 @@ async def api_config() -> JSONResponse:
         "poll_interval": config.get("poll_interval", 5),
         "shared_token": config["shared_token"],
         "auth_enabled": _auth_enabled(),
+        "token_from_env": bool(_resolve_effective_token()) and not bool(config.get("shared_token")),
         "db_file": str(storage.db_file),
     })
 
@@ -375,11 +490,13 @@ async def api_config_update(request: Request) -> JSONResponse:
         if key in body:
             val = body[key]
             if key in ("computer_collect_interval", "phone_timeout_ms", "poll_interval"):
-                val = max(300, int(val))
+                val = max(100, int(val))
             config[key] = val
             updated.append(key)
     if "computer_collect_interval" in updated:
         collector.interval = config["computer_collect_interval"] / 1000
+    if "computer_collect_enabled" in updated:
+        collector.collect_foreground = config["computer_collect_enabled"]
     save_config()
     return JSONResponse({"status": "ok", "updated": updated})
 
@@ -459,11 +576,14 @@ def _config_watcher() -> None:
                 continue
             _config_mtime = mtime
             new_config = load_config()
+            # 同步前台采集开关到采集器
+            if "computer_collect_enabled" in new_config:
+                collector.collect_foreground = new_config["computer_collect_enabled"]
             config.update(new_config)
             collector.interval = config["computer_collect_interval"] / 1000
-            print(f"[config] 配置已热重载: {list(new_config.keys())}")
+            _log("info", f"[config] 配置已热重载: {list(new_config.keys())}")
         except Exception as exc:
-            print(f"[config] 热重载失败: {exc}")
+            _log("error", f"[config] 热重载失败: {exc}")
 
 
 # ----------------------------------------------------------------------
@@ -473,8 +593,8 @@ def start_services() -> None:
     """启动采集器、落盘线程和配置热重载（硬件检测始终运行，前台数据落盘受开关控制）。"""
     storage.start()
     collector.start()  # 硬件检测始终运行
-    if config.get("computer_collect_enabled", True):
-        threading.Thread(target=_computer_persistence_loop, daemon=True, name="computer-persistence").start()
+    collector.collect_foreground = config.get("computer_collect_enabled", True)
+    threading.Thread(target=_computer_persistence_loop, daemon=True, name="computer-persistence").start()
     # 启动配置热重载监听
     global _config_watch_thread, _config_mtime
     _config_mtime = CONFIG_PATH.stat().st_mtime if CONFIG_PATH.exists() else 0
@@ -522,12 +642,20 @@ def create_server() -> uvicorn.Server:
 
 def main() -> None:
     """命令行入口：启动采集与落盘线程，前台运行 HTTP 服务。"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
     print("📡 Mizuki · 控制台 已启动")
     print(f"   WebUI 仪表盘:  http://localhost:{config['port']}/")
     print(f"   手机数据接口:  http://<你的局域网IP>:{config['port']}/phone-data")
     print(f"   合并数据接口:  http://localhost:{config['port']}/merged-data")
     if not _auth_enabled():
-        print("⚠ [安全] shared_token 未配置，接口鉴权已关闭。在 config.json 填入 shared_token，并在手机端/插件配置同一 token 后重启即可启用。")
+        print("⚠ [安全] shared_token 未配置，接口鉴权已关闭。在 config.json 填入 shared_token，或设置环境变量 MIZUKI_TOKEN，并在手机端/插件配置同一 token 后重启即可启用。")
+    else:
+        token_source = "环境变量" if (_resolve_effective_token() and not config.get("shared_token")) else "config.json"
+        print(f"🔒 鉴权已启用（{token_source}）")
     start_services()
     print(f"   数据落盘位置:  {storage.db_file}")
     server = create_server()

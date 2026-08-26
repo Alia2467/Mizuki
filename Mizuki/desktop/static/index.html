@@ -18,6 +18,7 @@
       </div>
       <div class="topbar-right">
         <button class="icon-btn" id="theme-btn" type="button" title="夜间模式">🌙</button>
+        <button class="icon-btn" id="export-toggle-btn" type="button" title="数据导出">📦</button>
         <button class="icon-btn" id="settings-btn" type="button" title="设置">⚙</button>
       </div>
     </header>
@@ -53,6 +54,21 @@
           <button class="btn-save" id="settings-save" type="button">保存</button>
           <span class="settings-msg" id="settings-msg"></span>
         </div>
+      </div>
+    </section>
+
+    <!-- 数据导出（全宽，默认隐藏，点击顶栏按钮展开） -->
+    <section class="card card--span2" id="card-export" style="display:none">
+      <div class="card-head">
+        <h2>📦 数据导出</h2>
+        <div class="export-actions">
+          <button class="btn-export" id="export-json" type="button">导出 JSON</button>
+          <button class="btn-export" id="export-csv" type="button">导出 CSV</button>
+          <span class="export-msg" id="export-msg"></span>
+        </div>
+      </div>
+      <div class="kv">
+        <div class="kv-row"><span class="kv-key">说明</span><span class="kv-val">导出全部落盘数据到本地文件（JSON 为完整结构，CSV 为展平表格）。</span></div>
       </div>
     </section>
 
@@ -94,7 +110,6 @@
         <div class="card-head">
           <h2>📱 手机状态</h2>
           <span class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">连接中…</span></span>
-          <span class="status-pill" id="plugin-pill" style="margin-left:8px"><span class="dot"></span><span id="plugin-text">插件</span></span>
         </div>
         <div class="kv">
           <div class="kv-row"><span class="kv-key">设备 ID</span><span class="kv-val" id="conn-device">—</span></div>
@@ -143,7 +158,9 @@
 
       <!-- 电脑状态 -->
       <section class="card">
-        <div class="card-head"><h2>💻 电脑状态</h2></div>
+        <div class="card-head"><h2>💻 电脑状态</h2>
+          <span class="status-pill" id="plugin-pill"><span class="dot"></span><span id="plugin-text">插件</span></span>
+        </div>
         <div class="kv">
           <div class="kv-row"><span class="kv-key">本地 IP</span><span class="kv-val" id="pc-ip">—</span></div>
           <div class="kv-row"><span class="kv-key">前台窗口</span><span class="kv-val" id="pc-window">—</span></div>

@@ -121,8 +121,8 @@ curl http://localhost:821/health
 # WebUI：浏览器打开 http://localhost:821/（exe 运行时自动弹出内嵌窗口）
 
 # 数据导出
-curl http://localhost:821/export/json -o export.json
-curl http://localhost:821/export/csv -o export.csv
+curl http://localhost:821/api/export/json -o export.json
+curl http://localhost:821/api/export/csv -o export.csv
 
 # 手机端 APK 源码编译
 cd Mizuki/android
@@ -169,17 +169,11 @@ Mizuki/
 ├── README.md                    # 本文档
 ├── LICENSE                      # GPL-3.0 全文
 ├── .editorconfig                # 编辑器配置
-├── .docs/
-│   ├── architecture.md          # 架构规格
-│   └── CHANGELOG.md             # 变更日志
 ├── Mizuki/                      # 源码根目录
 │   ├── android/                 # Android 手机端
 │   ├── desktop/                 # 电脑端源码
 │   └── plugin/                  # MaiBot 插件
 ├── test/                        # 自动化测试
-├── Release/                     # 构建产物归档
-│   ├── apk/                     # 手机端 APK
-│   └── exe/                     # 控制台发行目录
 └── start-tailscale.bat          # 异地组网脚本
 ```
 
@@ -190,7 +184,7 @@ Mizuki/
 - **手机端**：Kotlin 1.9.24、OkHttp、Gson、Google Fused Location、Health Connect、Leaflet
 - **电脑端**：FastAPI、uvicorn、psutil、pywin32、pywebview、pystray、Pillow、PyInstaller
 - **插件**：maibot_sdk 2.5+、httpx、asyncio
-- **数据**：JSON over HTTP，落盘 SQLite（WAL 模式）
+- **数据**：JSON over HTTP，SQLite
 - **构建**：AGP 8.4.2 + Gradle 8.7 + JDK 21；Python 3.13
 
 ---

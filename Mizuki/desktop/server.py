@@ -55,7 +55,7 @@ from database import DataCollector
 # ----------------------------------------------------------------------
 # 常量与路径（兼容 PyInstaller 打包：程序目录 vs 资源目录分离）
 # ----------------------------------------------------------------------
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # 值取 config.json 的 shared_token；手机上报与插件拉取共用同一请求头
 TOKEN_HEADER = "X-Sensor-Token"

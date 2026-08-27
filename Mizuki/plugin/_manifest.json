@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "海月之音",
-  "description": "给 AI 伴侣装上感官：拉取电脑端汇聚的手机/电脑状态数据，注入上下文，并在心率、步数、天气、导航结束等情境下结合人设主动说话。",
+  "description": "给 AI 伴侣装上感官：拉取电脑端汇聚的手机/电脑状态数据，注入上下文，并在心率、步数、天气等情境下结合人设主动说话。",
   "author": {
     "name": "海月之音",
     "url": "https://github.com/Alia2467/Mizuki"

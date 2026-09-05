@@ -9,8 +9,10 @@
 """
 
 import asyncio
+import operator
 import time
-from typing import Any
+from functools import reduce
+from typing import Any, Callable
 
 import httpx
 
@@ -173,24 +175,24 @@ class MizukiSensorPlugin(MaiBotPlugin):
             self._loop_task = asyncio.create_task(self._main_loop())
 
     async def on_unload(self) -> None:
-        if self._loop_task is not None and not self._loop_task.done():
-            self._loop_task.cancel()
-            try:
-                await self._loop_task
-            except asyncio.CancelledError:
-                pass
-        if self._heartbeat_task is not None and not self._heartbeat_task.done():
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
+        await self._cancel_task(self._loop_task)
+        await self._cancel_task(self._heartbeat_task)
         if self._http_client is not None:
             await self._http_client.aclose()
             self._http_client = None
         self._loop_task = None
         self._heartbeat_task = None
         self._get_logger().info("Mizuki 插件已卸载")
+
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task | None) -> None:
+        """取消一个任务并等待其结束（忽略 CancelledError）。"""
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
         del config_data
@@ -397,14 +399,18 @@ class MizukiSensorPlugin(MaiBotPlugin):
 # ----------------------------------------------------------------------
 
 
+_OPS: dict[str, Callable[[float, float], bool]] = {
+    ">=": operator.ge,
+    ">": operator.gt,
+    "<=": operator.le,
+    "<": operator.lt,
+    "==": operator.eq,
+}
+
+
 def _extract_field(data: dict[str, Any], path: str) -> Any:
     """按点分路径从合并数据中取字段，任一层缺失返回 None。"""
-    current: Any = data
-    for part in path.split("."):
-        if not isinstance(current, dict):
-            return None
-        current = current.get(part)
-    return current
+    return reduce(lambda d, k: d.get(k) if isinstance(d, dict) else None, path.split("."), data)
 
 
 def _compare(actual: Any, op: str, expected: Any) -> bool:
@@ -417,17 +423,7 @@ def _compare(actual: Any, op: str, expected: Any) -> bool:
         left, right = float(actual), float(expected)
     except (TypeError, ValueError):
         return False
-    if op == ">=":
-        return left >= right
-    if op == ">":
-        return left > right
-    if op == "<=":
-        return left <= right
-    if op == "<":
-        return left < right
-    if op == "==":
-        return left == right
-    return False
+    return _OPS.get(op, lambda a, b: False)(left, right)
 
 
 def _format_template(template: str, value: Any) -> str:

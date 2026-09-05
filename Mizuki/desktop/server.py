@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import sys
 import threading
@@ -90,6 +91,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "phone_timeout_ms": 10000,  # 超过该时长未上报视为手机离线（毫秒）
     "poll_interval": 5000,  # WebUI 仪表盘轮询间隔（毫秒）
     "shared_token": "",  # 共享鉴权 token；空串表示不启用鉴权（兼容模式）
+    "plugin_heartbeat_timeout": 10,  # 插件心跳超时（秒），超过此时间未心跳视为离线
 }
 
 app = FastAPI(title="控制台", version=VERSION)
@@ -225,7 +227,6 @@ storage = DataCollector(db_file=app_dir() / "data" / "collected.db")  # 收集�
 
 # 插件心跳追踪（plugin_id -> 最后心跳时间）
 _plugin_heartbeats: dict[str, datetime] = {}
-_PLUGIN_HEARTBEAT_TIMEOUT = 10  # 秒，超过此时间未心跳视为离线
 
 
 # ----------------------------------------------------------------------
@@ -238,23 +239,16 @@ def _iso_now() -> str:
 # ----------------------------------------------------------------------
 # 结构化日志（统一入口，便于后续扩展为文件日志）
 # ----------------------------------------------------------------------
-import logging
 
 _logger = logging.getLogger("mizuki")
 
 
+_LOG_LEVELS = {"error": logging.ERROR, "warning": logging.WARNING, "debug": logging.DEBUG, "info": logging.INFO}
+
+
 def _log(level: str, message: str) -> None:
     """统一日志入口，带级别与线程名。"""
-    thread_name = threading.current_thread().name
-    formatted = f"[{thread_name}] {message}"
-    if level == "error":
-        _logger.error(formatted)
-    elif level == "warning":
-        _logger.warning(formatted)
-    elif level == "debug":
-        _logger.debug(formatted)
-    else:
-        _logger.info(formatted)
+    _logger.log(_LOG_LEVELS.get(level, logging.INFO), f"[{threading.current_thread().name}] {message}")
 
 
 def _auth_enabled() -> bool:
@@ -278,27 +272,26 @@ def _check_token(request: Request) -> JSONResponse | None:
 _last_computer_key: tuple[Any, ...] | None = None
 
 
+_COMPUTER_PERSISTENCE_KEYS = ("foreground_window", "foreground_process", "is_gaming")
+
+
+def _computer_persistence_key(data: dict[str, Any]) -> tuple[Any, ...]:
+    """提取电脑状态落盘比对键（前台窗口/进程/游戏三元组）。"""
+    return tuple(data.get(k) for k in _COMPUTER_PERSISTENCE_KEYS)
+
+
 def _computer_persistence_loop() -> None:
     """后台线程：电脑状态前台三元组发生变化时，把快照交给收集装置落盘。"""
     global _last_computer_key
     while True:
         try:
-            # 运行时也可通过热重载关闭前台采集，线程不退出
-            if not config.get("computer_collect_enabled", True):
-                time.sleep(config["computer_collect_interval"] / 1000)
-                continue
-            data = collector.get_or_empty()
-            if not data:
-                time.sleep(config["computer_collect_interval"] / 1000)
-                continue
-            key = (
-                data.get("foreground_window"),
-                data.get("foreground_process"),
-                data.get("is_gaming"),
-            )
-            if key != _last_computer_key:
-                _last_computer_key = key
-                storage.record({"type": "computer", **data})
+            if config.get("computer_collect_enabled", True):
+                data = collector.get()
+                if data:
+                    key = _computer_persistence_key(data)
+                    if key != _last_computer_key:
+                        _last_computer_key = key
+                        storage.record({"type": "computer", **data})
         except Exception as exc:
             _log("error", f"[电脑状态采集] 异常: {exc}")
         # 间隔唯一数据源是 config；落盘比对与采集器共用同一配置项
@@ -309,9 +302,7 @@ def _phone_is_online() -> bool:
     # 共享状态的读取也必须持锁（写入方在请求处理器内持 _state_lock）
     with _state_lock:
         received_at = _phone_received_at
-    if received_at is None:
-        return False
-    return (datetime.now() - received_at).total_seconds() * 1000 <= config["phone_timeout_ms"]
+    return received_at is not None and (datetime.now() - received_at).total_seconds() * 1000 <= config["phone_timeout_ms"]
 
 
 def _build_state() -> dict[str, Any]:
@@ -320,7 +311,7 @@ def _build_state() -> dict[str, Any]:
         with _state_lock:
             phone = dict(_latest_phone)
             phone_last_seen = _phone_received_at.isoformat(timespec="seconds") if _phone_received_at else None
-        # collector.get() 已包含硬件 + 前台（受 collect_foreground 控制）
+        # collector.get() 已包含硬件 + 前台（受 is_collecting_foreground 控制）
         computer = collector.get()
         return {
             "timestamp": _iso_now(),
@@ -346,20 +337,11 @@ def _build_state() -> dict[str, Any]:
         }
 
 
-def _collector_foreground_snapshot() -> dict[str, Any]:
-    """采集前台窗口/进程/游戏/导航状态（供 computer_collect_enabled 合并）。"""
-    return collector.snapshot_foreground()
-
-
 def _merged_data() -> dict[str, Any]:
     """供 MaiBot 插件拉取的合并数据。"""
     state = _build_state()
-    return {
-        "timestamp": state["timestamp"],
-        "phone": state["phone"],
-        "phone_connected": state["phone_connected"],
-        "computer": state["computer"],
-    }
+    keys = ("timestamp", "phone", "phone_connected", "computer")
+    return {k: state[k] for k in keys}
 
 
 # ----------------------------------------------------------------------
@@ -393,11 +375,8 @@ async def health_deep() -> JSONResponse:
     collector_alive = collector._thread is not None and collector._thread.is_alive()
 
     # 插件心跳状态
-    plugins_online = 0
     plugins_total = len(_plugin_heartbeats)
-    for last_beat in _plugin_heartbeats.values():
-        if (now - last_beat).total_seconds() < _PLUGIN_HEARTBEAT_TIMEOUT:
-            plugins_online += 1
+    plugins_online = sum(1 for t in _plugin_heartbeats.values() if (now - t).total_seconds() < config.get("plugin_heartbeat_timeout", 10))
 
     overall_healthy = db_healthy and collector_alive
 
@@ -412,7 +391,7 @@ async def health_deep() -> JSONResponse:
         },
         "collector": {
             "alive": collector_alive,
-            "collect_foreground": collector.collect_foreground,
+            "collect_foreground": collector.is_collecting_foreground,
         },
         "plugins": {
             "online": plugins_online,
@@ -496,7 +475,7 @@ async def api_config_update(request: Request) -> JSONResponse:
     if "computer_collect_interval" in updated:
         collector.interval = config["computer_collect_interval"] / 1000
     if "computer_collect_enabled" in updated:
-        collector.collect_foreground = config["computer_collect_enabled"]
+        collector.is_collecting_foreground = config["computer_collect_enabled"]
     save_config()
     return JSONResponse({"status": "ok", "updated": updated})
 
@@ -551,9 +530,9 @@ async def plugin_status() -> JSONResponse:
         plugins.append({
             "plugin_id": plugin_id,
             "last_seen": last_beat.isoformat(timespec="seconds"),
-            "online": elapsed < _PLUGIN_HEARTBEAT_TIMEOUT,
+            "online": elapsed < config.get("plugin_heartbeat_timeout", 10),
         })
-    return JSONResponse({"plugins": plugins, "timeout": _PLUGIN_HEARTBEAT_TIMEOUT})
+    return JSONResponse({"plugins": plugins, "timeout": config.get("plugin_heartbeat_timeout", 10)})
 
 
 # ----------------------------------------------------------------------
@@ -578,7 +557,7 @@ def _config_watcher() -> None:
             new_config = load_config()
             # 同步前台采集开关到采集器
             if "computer_collect_enabled" in new_config:
-                collector.collect_foreground = new_config["computer_collect_enabled"]
+                collector.is_collecting_foreground = new_config["computer_collect_enabled"]
             config.update(new_config)
             collector.interval = config["computer_collect_interval"] / 1000
             _log("info", f"[config] 配置已热重载: {list(new_config.keys())}")
@@ -593,7 +572,7 @@ def start_services() -> None:
     """启动采集器、落盘线程和配置热重载（硬件检测始终运行，前台数据落盘受开关控制）。"""
     storage.start()
     collector.start()  # 硬件检测始终运行
-    collector.collect_foreground = config.get("computer_collect_enabled", True)
+    collector.is_collecting_foreground = config.get("computer_collect_enabled", True)
     threading.Thread(target=_computer_persistence_loop, daemon=True, name="computer-persistence").start()
     # 启动配置热重载监听
     global _config_watch_thread, _config_mtime
@@ -620,12 +599,10 @@ def _is_port_available(host: str, port: int) -> bool:
 
 def _find_available_port(host: str, preferred: int, max_search: int = 100) -> int:
     """从首选端口开始向上搜索可用端口。"""
-    if _is_port_available(host, preferred):
-        return preferred
-    for port in range(preferred + 1, preferred + max_search):
-        if _is_port_available(host, port):
-            return port
-    return preferred  # 搜索失败仍返回首选，让 uvicorn 报错
+    return next(
+        (port for port in range(preferred, preferred + max_search) if _is_port_available(host, port)),
+        preferred,
+    )
 
 
 def create_server() -> uvicorn.Server:

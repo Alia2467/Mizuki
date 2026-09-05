@@ -495,21 +495,6 @@ class SensorService : Service(), SensorEventListener {
         return result
     }
 
-    private fun weatherCodeToCondition(code: Int): String {
-        return when (code) {
-            0 -> "clear"
-            1, 2, 3 -> "cloudy"
-            45, 48 -> "fog"
-            in 51..57 -> "drizzle"
-            in 61..67 -> "rain"
-            in 71..77 -> "snow"
-            in 80..82 -> "shower"
-            85, 86 -> "snow"
-            in 95..99 -> "thunderstorm"
-            else -> "unknown"
-        }
-    }
-
     /** 无 GPS 时用 IP 定位获取坐标。 */
     private fun ipGeolocation(): Pair<Double, Double>? {
         return try {
@@ -769,5 +754,22 @@ class SensorService : Service(), SensorEventListener {
                 svc.handler.post { svc.collectAndSend() }
             }
         }
+
+        /** WMO 天气代码区间 → 受控词表字符串。 */
+        private val WEATHER_MAP: Map<IntRange, String> = mapOf(
+            0..0 to "clear",
+            1..3 to "cloudy",
+            45..48 to "fog",
+            51..57 to "drizzle",
+            61..67 to "rain",
+            71..77 to "snow",
+            80..82 to "shower",
+            85..86 to "snow",
+            95..99 to "thunderstorm",
+        )
+
+        /** WMO 天气代码 → 受控词表字符串。 */
+        fun weatherCodeToCondition(code: Int): String =
+            WEATHER_MAP.entries.firstOrNull { code in it.key }?.value ?: "unknown"
     }
 }

@@ -1,48 +1,47 @@
-"""诊断脚本：检查控制台服务是否正常运行"""
-import sys
+"""Check the configured data endpoint without printing credentials or private payloads."""
+import argparse
 import json
-import urllib.request
+import os
+from pathlib import Path
+import sys
 import urllib.error
+import urllib.request
 
-URL = "http://localhost:821/merged-data"
+_desktop = Path(__file__).resolve().parent.parent / "Mizuki" / "desktop"
+sys.path.insert(0, str(_desktop))
+from server import DEFAULT_CONFIG, TOKEN_HEADER
 
-def main():
-    print(f"正在测试 {URL} ...")
+
+def main() -> int:
+    if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--url", default=f"http://localhost:{DEFAULT_CONFIG['port']}/merged-data")
+    args = parser.parse_args()
+    headers = {}
+    token = os.environ.get("MIZUKI_TOKEN", "").strip()
+    if token:
+        headers[TOKEN_HEADER] = token
     try:
-        req = urllib.request.Request(URL)
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            status = resp.status
-            body = resp.read().decode("utf-8")
-            print(f"状态码: {status}")
-            print(f"响应长度: {len(body)} 字节")
-            try:
-                data = json.loads(body)
-                print(f"JSON 解析: 成功")
-                print(f"  timestamp: {data.get('timestamp', 'N/A')}")
-                print(f"  phone_connected: {data.get('phone_connected', 'N/A')}")
-                print(f"  computer keys: {list(data.get('computer', {}).keys())}")
-                print("\n结论: 服务正常")
-            except json.JSONDecodeError:
-                print(f"JSON 解析: 失败")
-                print(f"原始响应: {body[:200]}")
-                print("\n结论: 服务返回了非 JSON 数据")
-    except urllib.error.HTTPError as e:
-        print(f"HTTP 错误: {e.code} {e.reason}")
-        body = e.read().decode("utf-8", errors="replace")
-        print(f"响应体: {body[:200]}")
-        if e.code == 502:
-            print("\n可能原因:")
-            print("  1. 服务器进程异常（重启服务器试试）")
-            print("  2. 杀毒软件/防火墙拦截了本地 HTTP 请求")
-            print("  3. 系统代理设置拦截了 localhost 请求")
-    except urllib.error.URLError as e:
-        print(f"连接失败: {e.reason}")
-        print("\n可能原因:")
-        print("  1. 控制台服务没启动")
-        print("  2. 端口号不对（默认 821）")
-        print("  3. 防火墙阻止了连接")
-    except Exception as e:
-        print(f"未知错误: {type(e).__name__}: {e}")
+        request = urllib.request.Request(args.url, headers=headers)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            data = json.load(response)
+        if not isinstance(data, dict):
+            raise ValueError("响应不是 JSON 对象")
+        print("连接成功；JSON 结构有效")
+        print(f"phone_connected: {data.get('phone_connected', False)}")
+        print(f"computer 字段: {list((data.get('computer') or {}).keys())}")
+        return 0
+    except urllib.error.HTTPError as exc:
+        print(f"HTTP {exc.code}")
+        if exc.code == 401:
+            print("请通过 MIZUKI_TOKEN 环境变量提供与控制台一致的令牌。")
+        elif exc.code == 429:
+            print("已限流，请稍后重试。")
+    except (urllib.error.URLError, OSError, ValueError):
+        print("连接或响应解析失败，请检查服务、端口与网络设置。")
+    return 1
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

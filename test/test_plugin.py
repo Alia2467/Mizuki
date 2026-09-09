@@ -15,20 +15,16 @@ if str(_plugin_dir) not in sys.path:
 if "maibot_sdk" not in sys.modules:
     mock_sdk = types.ModuleType("maibot_sdk")
 
-    class _Field:
-        def __init__(self, default=None, description="", **kwargs):
-            self.default = default
-            self.description = description
+    # 保留真实 Pydantic 字段/嵌套模型校验，只替换宿主插件及 SDK 边界。
+    # 这不是 maibot_sdk 的配置加载集成测试。
+    from pydantic import BaseModel, Field
 
-    class _Base:
+    class _Plugin:
         pass
 
-    class _Plugin(_Base):
-        pass
-
-    mock_sdk.Field = _Field
+    mock_sdk.Field = Field
     mock_sdk.MaiBotPlugin = _Plugin
-    mock_sdk.PluginConfigBase = _Base
+    mock_sdk.PluginConfigBase = BaseModel
     sys.modules["maibot_sdk"] = mock_sdk
 
 # 导入纯函数

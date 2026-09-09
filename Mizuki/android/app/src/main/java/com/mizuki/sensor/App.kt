@@ -11,7 +11,7 @@ class App : Application() {
         super.onCreate()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-                FontManager.applyTo(activity)
+                FontApplier.applyTo(activity)
             }
 
             override fun onActivityStarted(activity: Activity) {}

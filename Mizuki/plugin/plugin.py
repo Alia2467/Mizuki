@@ -1,29 +1,30 @@
-"""Mizuki 插件 — MaiBot 主动感知（决策执行层）
+"""Mizuki 插件 — MaiBot 主动感知（决策执行层）。
 
-职责：
-- 周期从电脑端汇聚服务拉取合并数据（手机 + 电脑状态）
-- 把当前情境翻译成自然语言，注入 MaiBot 的上下文
-- 基于内置触发规则，请求 MaiBot 结合人设主动说话（不是固定模板，是海月自己生成）
-
-数据流：手机 APP → 电脑端 → 本插件 → MaiBot 主动说话
+手机/电脑采集与汇聚由控制台负责；本插件仅判断情境、注入上下文、请求主动说话。
+SDK 返回值的确认边界见 _result_accepted；未知返回不会被当作成功。
 """
 
 import asyncio
+import math
 import operator
 import time
 from functools import reduce
-from typing import Any, Callable
+from string import Formatter
+from typing import Any, Callable, Literal
+from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
 
 from maibot_sdk import Field, MaiBotPlugin, PluginConfigBase
 
-# 鉴权头名称（与控制台 server.py 的 TOKEN_HEADER 一致）
 TOKEN_HEADER = "X-Sensor-Token"
-
-# ----------------------------------------------------------------------
-# 配置模型
-# ----------------------------------------------------------------------
+HTTP_TIMEOUT_SECONDS = 3
+SDK_TIMEOUT_SECONDS = 10
+HEARTBEAT_INTERVAL_SECONDS = 3
+RETRY_INITIAL_SECONDS = 5
+RETRY_MAX_SECONDS = 60
+FAILURE_LOG_INTERVAL_SECONDS = 30
 
 
 class PluginSectionConfig(PluginConfigBase):
@@ -34,7 +35,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件")
-    config_version: str = Field(default="1.0.0", description="配置版本")
+    config_version: str = Field(default="1.1.3", description="配置版本")
 
 
 class SourceConfig(PluginConfigBase):
@@ -57,7 +58,7 @@ class TargetConfig(PluginConfigBase):
     __ui_order__ = 2
 
     platform: str = Field(default="qq", description="平台标识，例如 qq")
-    chat_type: str = Field(default="private", description="聊天类型：private / group")
+    chat_type: Literal["private", "group"] = Field(default="private", description="聊天类型：private / group")
     user_id: str = Field(default="", description="私聊目标用户 ID（chat_type=private 时生效）")
     group_id: str = Field(default="", description="群聊目标群 ID（chat_type=group 时生效）")
 
@@ -69,27 +70,27 @@ class ProactiveConfig(PluginConfigBase):
     __ui_icon__ = "message-circle"
     __ui_order__ = 3
 
-    cooldown_ms: int = Field(default=180000, ge=60000, description="同一触发条件的冷却时间（毫秒）")
+    cooldown_ms: int = Field(default=180000, ge=60000, description="同一触发条件成功受理后的冷却时间（毫秒）")
 
 
 class RuleSpec(PluginConfigBase):
-    """声明式规则：对合并数据某字段做条件判断，命中则注入情境并请求主动说话。"""
+    """声明式规则；规则键唯一，成功冷却和失败退避均按键独立。"""
 
     __ui_label__ = "规则条目"
     __ui_icon__ = "bell"
     __ui_order__ = 0
 
-    key: str = Field(default="", description="规则键（冷却计时按此键独立）")
+    key: str = Field(default="", description="规则键（必须非空且在规则表内唯一）")
     enabled: bool = Field(default=True, description="是否启用本条规则")
     field: str = Field(default="", description="合并数据字段路径，如 phone.health.heart_rate")
-    op: str = Field(default=">=", description="比较运算符：>= / > / <= / < / == / in")
+    op: Literal[">=", ">", "<=", "<", "==", "in"] = Field(default=">=", description="比较运算符：>= / > / <= / < / == / in")
     value: Any = Field(default=0, description="阈值；op=in 时为候选值列表")
     situation: str = Field(default="", description="注入情境模板，支持占位符 {value}")
     intent: str = Field(default="", description="主动说话意图模板，支持占位符 {value}")
 
 
 def _default_rules() -> list[RuleSpec]:
-    """内置规则表默认值（与旧版硬编码规则等价的声明式表达）。"""
+    """内置规则表默认值。"""
     return [
         RuleSpec(
             key="heart_high", field="phone.health.heart_rate", op=">=", value=100,
@@ -103,7 +104,6 @@ def _default_rules() -> list[RuleSpec]:
         ),
         RuleSpec(
             key="weather_rain", field="phone.weather.condition", op="in",
-            # 候选值与契约受控词表（架构规格 §2.1）一致，不得新造词
             value=["rain", "snow", "shower", "drizzle", "thunderstorm"],
             situation="当前天气为 {value}。",
             intent="外面在下雨（或下雪），提醒 TA 出门带伞、路上注意安全。",
@@ -123,11 +123,11 @@ class RulesConfig(PluginConfigBase):
     __ui_icon__ = "bell"
     __ui_order__ = 4
 
-    table: list[RuleSpec] = Field(default_factory=_default_rules, description="声明式规则表，按顺序求值，首个命中即触发")
+    table: list[RuleSpec] = Field(default_factory=_default_rules, description="按顺序求值，合并所有命中规则后一次触发")
 
 
 class MizukiSensorConfig(PluginConfigBase):
-    """Mizuki 插件总配置。"""
+    """Mizuki 插件总配置；跨字段校验在加载和热更新时统一执行。"""
 
     plugin: PluginSectionConfig = Field(default_factory=PluginSectionConfig)
     source: SourceConfig = Field(default_factory=SourceConfig)
@@ -136,307 +136,458 @@ class MizukiSensorConfig(PluginConfigBase):
     rules: RulesConfig = Field(default_factory=RulesConfig)
 
 
-# ----------------------------------------------------------------------
-# 插件主体
-# ----------------------------------------------------------------------
-
-
 class MizukiSensorPlugin(MaiBotPlugin):
-    """Mizuki 插件。"""
+    """异步采集、规则求值和 SDK 调用；任务由加载/更新/卸载串行管理。"""
 
     config_model = MizukiSensorConfig
 
     def __init__(self) -> None:
         super().__init__()
         self._loop_task: asyncio.Task | None = None
-        self._stream_id: str = ""
-        self._last_spoken: dict[str, float] = {}
-        self._connection_status: str = "unknown"
-        self._http_client: httpx.AsyncClient | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        self._http_client: httpx.AsyncClient | None = None
+        self._lifecycle_lock = asyncio.Lock()
+        self._is_loaded = False
+        self._is_config_valid = False
+        self._generation = 0
+        self._clock = time.monotonic
+        self._stream_id = ""
+        self._connection_status = "unknown"
+        self._is_navigating: bool | None = None
+        self._last_spoken: dict[str, float] = {}
+        self._failures: dict[str, int] = {}
+        self._retry_after: dict[str, float] = {}
+        self._last_warning: dict[str, float] = {}
+        # 未完成事件按批保存；同一规则最多属于一个事件，内存受规则数限制。
+        self._pending: dict[str, dict[str, Any]] = {}
 
     @property
     def _http(self) -> httpx.AsyncClient:
-        """复用 httpx 客户端（避免每次请求重建连接）。"""
+        if not self._is_loaded:
+            raise RuntimeError("插件已卸载")
         if self._http_client is None:
-            self._http_client = httpx.AsyncClient(timeout=3)
+            self._http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT_SECONDS)
         return self._http_client
 
-    # ------------------------------------------------------------------
-    # 生命周期
-    # ------------------------------------------------------------------
+    def _is_active(self, generation: int) -> bool:
+        return (self._is_loaded and self._is_config_valid and self.config.plugin.enabled
+                and generation == self._generation)
+
+    def _build_headers(self) -> dict[str, str]:
+        return {TOKEN_HEADER: self.config.source.token} if self.config.source.token else {}
+
     async def on_load(self) -> None:
+        async with self._lifecycle_lock:
+            if self._is_loaded:
+                return
+            self._is_loaded = True
+            await self._load_runtime()
         self._get_logger().info("Mizuki 插件已加载")
-        # 启动时检测连接状态
-        await self._test_connection()
-        # 启动心跳上报
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
-        if self.config.plugin.enabled:
-            self._loop_task = asyncio.create_task(self._main_loop())
-
-    async def on_unload(self) -> None:
-        await self._cancel_task(self._loop_task)
-        await self._cancel_task(self._heartbeat_task)
-        if self._http_client is not None:
-            await self._http_client.aclose()
-            self._http_client = None
-        self._loop_task = None
-        self._heartbeat_task = None
-        self._get_logger().info("Mizuki 插件已卸载")
-
-    @staticmethod
-    async def _cancel_task(task: asyncio.Task | None) -> None:
-        """取消一个任务并等待其结束（忽略 CancelledError）。"""
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
 
     async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
-        del config_data
-        # 目标配置可能变更，清空缓存让下一轮重新解析聊天流
-        self._stream_id = ""
-        # 配置更新后重新检测连接
-        await self._test_connection()
+        del config_data  # SDK 已更新 self.config；不另存第二份配置。
+        async with self._lifecycle_lock:
+            if not self._is_loaded:
+                return
+            await self._load_runtime()
         self._get_logger().info("Mizuki 配置已更新: scope=%s version=%s", scope, version)
 
-    # ------------------------------------------------------------------
-    # 连接检测
-    # ------------------------------------------------------------------
-    async def _test_connection(self) -> None:
-        """检测与控制台的连接状态。"""
-        url = self.config.source.data_url.replace("/merged-data", "/health")
-        headers: dict[str, str] = {}
-        if self.config.source.token:
-            headers[TOKEN_HEADER] = self.config.source.token
+    async def _load_runtime(self) -> None:
+        """取消旧代任务后再启动新代；重复通知不会产生并行主循环。"""
+        self._is_config_valid = False
+        self._generation += 1
+        await self._cancel_tasks()
+        self._stream_id = ""
+        self._is_navigating = None
+        self._pending.clear()
+        self._failures.clear()
+        self._retry_after.clear()
+        self._last_warning.clear()
         try:
-            resp = await self._http.get(url, headers=headers)
-            if resp.status_code == 200:
-                body = resp.json()
-                if body.get("status") == "ok":
-                    self._connection_status = "connected"
-                    self._get_logger().info(
-                        "控制台连接成功: version=%s phone_connected=%s",
-                        body.get("version", "unknown"),
-                        body.get("phone_connected", "unknown"),
-                    )
-                else:
-                    self._connection_status = "error"
-                    self._get_logger().warning("控制台响应异常: %s", body)
-            else:
-                self._connection_status = "error"
-                self._get_logger().warning("控制台返回错误: HTTP %s", resp.status_code)
+            _validate_config(self.config)
+        except (ValueError, TypeError, AttributeError) as exc:
+            self._connection_status = "error"
+            self._get_logger().error("Mizuki 配置无效，已暂停任务: %s", exc)
+            return
+        self._is_config_valid = True
+        await self._test_connection()
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop(), name="mizuki-heartbeat")
+        if self.config.plugin.enabled:
+            self._loop_task = asyncio.create_task(self._main_loop(), name="mizuki-rules")
+
+    async def _cancel_tasks(self) -> None:
+        tasks = [task for task in (self._loop_task, self._heartbeat_task) if task is not None]
+        self._loop_task = None
+        self._heartbeat_task = None
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            # 同时取消、收取已结束任务的异常；某个任务失败不阻碍其余资源清理。
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def on_unload(self) -> None:
+        async with self._lifecycle_lock:
+            self._is_loaded = False
+            self._is_config_valid = False
+            self._generation += 1
+            await self._cancel_tasks()
+            self._pending.clear()
+            client, self._http_client = self._http_client, None
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception as exc:
+                    self._get_logger().warning("关闭 HTTP 客户端失败: %s", type(exc).__name__)
+        self._get_logger().info("Mizuki 插件已卸载")
+
+    def _can_retry(self, key: str) -> bool:
+        return self._clock() >= self._retry_after.get(key, 0)
+
+    def _record_failure(self, key: str, message: str) -> None:
+        # 计数本身也有上限，避免长时间离线形成无限增大的指数。
+        attempt = min(self._failures.get(key, 0) + 1, 8)
+        self._failures[key] = attempt
+        delay = min(RETRY_INITIAL_SECONDS * 2 ** (attempt - 1), RETRY_MAX_SECONDS)
+        now = self._clock()
+        self._retry_after[key] = now + delay
+        last = self._last_warning.get(key)
+        if last is None or now - last >= FAILURE_LOG_INTERVAL_SECONDS:
+            self._last_warning[key] = now
+            self._get_logger().warning("%s；%.0f 秒后可重试", message, delay)
+
+    def _record_success(self, key: str) -> None:
+        self._failures.pop(key, None)
+        self._retry_after.pop(key, None)
+
+    async def _test_connection(self) -> None:
+        try:
+            url = _build_endpoint_url(self.config.source.data_url, "health")
+            resp = await self._http.get(url, headers=self._build_headers())
+            resp.raise_for_status()
+            body = resp.json()
+            if not isinstance(body, dict) or body.get("status") != "ok":
+                raise ValueError("invalid health response")
+            self._connection_status = "connected"
+            self._record_success("health")
         except Exception as exc:
             self._connection_status = "disconnected"
-            self._get_logger().error("控制台连接失败: %s", exc)
+            # 异常文本可能带 URL 查询或鉴权信息，只记录异常类型。
+            self._record_failure("health", f"控制台连接检测失败: {type(exc).__name__}")
 
-    # ------------------------------------------------------------------
-    # 心跳上报
-    # ------------------------------------------------------------------
     async def _heartbeat_loop(self) -> None:
-        """定期向控制台上报心跳（供 WebUI 显示插件连接状态）。"""
-        heartbeat_url = self.config.source.data_url.replace("/merged-data", "/plugin-heartbeat")
-        while True:
-            try:
-                headers: dict[str, str] = {}
-                if self.config.source.token:
-                    headers[TOKEN_HEADER] = self.config.source.token
-                await self._http.post(heartbeat_url, json={"plugin_id": "mizuki-sensor"}, headers=headers)
-            except Exception:
-                pass  # 心跳失败不影响主功能
-            await asyncio.sleep(3)
+        generation = self._generation
+        while self._is_loaded and generation == self._generation:
+            await self._send_heartbeat()
+            delay = max(HEARTBEAT_INTERVAL_SECONDS, self._retry_after.get("heartbeat", 0) - self._clock())
+            await asyncio.sleep(delay)
 
-    # ------------------------------------------------------------------
-    # 主循环
-    # ------------------------------------------------------------------
+    async def _send_heartbeat(self) -> None:
+        if not self._is_loaded or not self._can_retry("heartbeat"):
+            return
+        try:
+            url = _build_endpoint_url(self.config.source.data_url, "api/plugin-heartbeat")
+            resp = await self._http.post(url, json={"plugin_id": "mizuki-sensor"}, headers=self._build_headers())
+            resp.raise_for_status()
+            self._record_success("heartbeat")
+        except Exception as exc:
+            self._record_failure("heartbeat", f"插件心跳失败: {type(exc).__name__}")
+
     async def _main_loop(self) -> None:
-        while True:
+        generation = self._generation
+        while self._is_active(generation):
             try:
-                await self._tick()
+                if self._can_retry("loop"):
+                    await self._tick()
+                    self._record_success("loop")
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self._get_logger().error("Mizuki 主循环异常: %s", exc)
-            await asyncio.sleep(int(self.config.source.fetch_interval) / 1000)
+                self._record_failure("loop", f"Mizuki 主循环异常: {type(exc).__name__}")
+            delay = max(self.config.source.fetch_interval / 1000,
+                        self._retry_after.get("fetch", 0) - self._clock(),
+                        self._retry_after.get("loop", 0) - self._clock())
+            await asyncio.sleep(delay)
 
     async def _tick(self) -> None:
+        generation = self._generation
+        if not self._is_active(generation):
+            return
         data = await self._fetch_data()
-        if not data:
+        if not self._is_active(generation) or not data:
             return
-
-        stream_id = await self._resolve_stream()
-        if not stream_id:
-            return
-
-        phone = data.get("phone") or {}
-        usage = phone.get("usage") or {}
-
-        is_navigating = bool(usage.get("is_navigating"))
-        is_calling = bool(usage.get("is_calling"))
-
-        # 安静模式：导航中/通话中不说话
+        data = _build_current_data(data)
+        usage = _extract_field(data, "phone.usage") or {}
+        if not isinstance(usage, dict):
+            usage = {}
+        is_connected = data.get("phone_connected") is True
+        is_navigating = usage.get("is_navigating") is True
+        is_calling = usage.get("is_calling") is True
+        # 翻转检测先于安静门控。离线重置为未知，不伪造一次“导航结束”。
+        previous = self._is_navigating
+        self._is_navigating = is_navigating if is_connected else None
+        if previous is not None and is_connected and previous != is_navigating:
+            self._get_logger().debug("导航状态变化: %s -> %s", previous, is_navigating)
+        # 不生成额外主动消息；进入安静状态时丢弃待触发事件，恢复后重新求值。
         if is_navigating or is_calling:
+            self._pending.clear()
             return
-
-        await self._evaluate_rules(stream_id, data)
+        stream_id = await self._resolve_stream()
+        if stream_id and self._is_active(generation):
+            await self._evaluate_rules(stream_id, data)
 
     async def _evaluate_rules(self, stream_id: str, data: dict[str, Any]) -> None:
-        """按声明式规则表顺序求值，收集所有命中规则合并注入上下文并触发主动说话。"""
-        matched = []
+        generation = self._generation
+        if not self._is_active(generation):
+            return
+        data = _build_current_data(data)
+        eligible = {}
         for rule in self.config.rules.table:
-            if not rule.enabled or not rule.key or not rule.field:
+            if not rule.enabled or not self._can_speak(rule.key):
                 continue
             actual = _extract_field(data, rule.field)
-            if actual is None or not _compare(actual, rule.op, rule.value):
-                continue
-            # 冷却检查：冷却期内跳过但不中断后续规则
-            if not self._can_speak(rule.key):
-                continue
-            matched.append((rule.key, rule, actual))
-        if not matched:
-            return
-        # 所有命中规则的情境合并注入
-        situations = []
-        intents = []
-        for trigger_key, rule, actual in matched:
-            situations.append(_format_template(rule.situation, actual))
-            intents.append(_format_template(rule.intent, actual))
-            self._last_spoken[trigger_key] = time.time()
-        combined_situation = " ".join(situations)
-        combined_intent = " ".join(intents)
-        try:
-            await self.ctx.maisaka.append_context(
-                stream_id,
-                [{"type": "text", "content": f"[海月之音] {combined_situation}"}],
-                visible_text=f"[海月之音] {combined_situation}",
-                source_kind="plugin:Mizuki_sensor",
-                message_id=f"Mizuki-sensor:multi:{int(time.time())}",
-            )
-            result = await self.ctx.maisaka.trigger_proactive(
-                stream_id,
-                combined_intent,
-                reason=f"触发规则:{','.join(k for k, _, _ in matched)}",
-                priority="normal",
-                metadata={"triggers": [k for k, _, _ in matched]},
-            )
-            self._get_logger().info("海月主动说话已触发: %s → %s", [k for k, _, _ in matched], result)
-        except Exception as exc:
-            self._get_logger().error("触发主动说话失败: %s", exc)
+            if actual is not None and _compare(actual, rule.op, rule.value):
+                eligible[rule.key] = (rule, actual)
+        # 条件消失、手机离线或目标改变时，旧事件不能继续发送。
+        for event_id, batch in list(self._pending.items()):
+            if batch["stream_id"] != stream_id or not set(batch["keys"]).issubset(eligible):
+                del self._pending[event_id]
+        reserved = {key for batch in self._pending.values() for key in batch["keys"]}
+        keys = [key for key in eligible if key not in reserved and self._can_retry(f"rule:{key}")]
+        if keys:
+            event_id = f"Mizuki-sensor:{uuid4().hex}"
+            self._pending[event_id] = {
+                "stream_id": stream_id, "keys": keys, "has_context": False,
+                "situation": " ".join(_format_template(eligible[key][0].situation, eligible[key][1]) for key in keys),
+                "intent": " ".join(_format_template(eligible[key][0].intent, eligible[key][1]) for key in keys),
+            }
+        for event_id, batch in list(self._pending.items()):
+            if not self._is_active(generation):
+                return
+            if all(self._can_retry(f"rule:{key}") for key in batch["keys"]):
+                await self._trigger_batch(event_id, batch, generation)
 
-    # ------------------------------------------------------------------
-    # 主动说话
-    # ------------------------------------------------------------------
+    async def _trigger_batch(self, event_id: str, batch: dict[str, Any], generation: int) -> None:
+        stage = "append_context"
+        failure_reason = "调用异常"
+        try:
+            if not batch["has_context"]:
+                text = f"[海月之音] {batch['situation']}"
+                result = await asyncio.wait_for(self.ctx.maisaka.append_context(
+                    batch["stream_id"], [{"type": "text", "content": text}],
+                    visible_text=text, source_kind="plugin:Mizuki_sensor", message_id=event_id,
+                ), timeout=SDK_TIMEOUT_SECONDS)
+                if not _result_accepted(result):
+                    failure_reason = "返回失败或未知结构"
+                    raise ValueError("append_context acceptance unconfirmed")
+                batch["has_context"] = True
+            if not self._is_active(generation):
+                return
+            stage = "trigger_proactive"
+            result = await asyncio.wait_for(self.ctx.maisaka.trigger_proactive(
+                batch["stream_id"], batch["intent"], reason=f"触发规则:{','.join(batch['keys'])}",
+                priority="normal", metadata={"triggers": batch["keys"], "event_id": event_id},
+            ), timeout=SDK_TIMEOUT_SECONDS)
+            if not _result_accepted(result):
+                failure_reason = "返回失败或未知结构"
+                raise ValueError("trigger_proactive acceptance unconfirmed")
+            if not self._is_active(generation):
+                return
+            now = self._clock()
+            for key in batch["keys"]:
+                self._last_spoken[key] = now
+                self._record_success(f"rule:{key}")
+            self._pending.pop(event_id, None)
+            self._get_logger().info("海月主动说话请求已受理: %s", batch["keys"])
+        except Exception as exc:
+            for key in batch["keys"]:
+                self._record_failure(f"rule:{key}", f"{stage} {failure_reason}: {type(exc).__name__}")
+            # 已确认的上下文保留；下次只重试触发。未确认的注入沿用同一 message_id。
+            # trigger 超时后的远端去重依赖 SDK，metadata 中事件 ID 不是 exactly-once 保证。
+
     def _can_speak(self, trigger_key: str) -> bool:
         last = self._last_spoken.get(trigger_key)
-        if last is None:
-            return True
-        return time.time() - last >= self.config.proactive.cooldown_ms / 1000
+        return last is None or self._clock() - last >= self.config.proactive.cooldown_ms / 1000
 
-    # ------------------------------------------------------------------
-    # 数据拉取与聊天流解析
-    # ------------------------------------------------------------------
     async def _fetch_data(self) -> dict[str, Any]:
-        url = self.config.source.data_url
-        headers: dict[str, str] = {}
-        if self.config.source.token:
-            headers[TOKEN_HEADER] = self.config.source.token
+        if not self._is_loaded or not self._can_retry("fetch"):
+            return {}
         try:
-            resp = await self._http.get(url, headers=headers)
-            if resp.status_code != 200:
-                self._connection_status = "error"
-                self._get_logger().warning("拉取数据失败: HTTP %s", resp.status_code)
-                return {}
+            resp = await self._http.get(self.config.source.data_url, headers=self._build_headers())
+            resp.raise_for_status()
             data = resp.json()
+            if not isinstance(data, dict):
+                raise ValueError("merged-data must be an object")
             self._connection_status = "connected"
-            return data if isinstance(data, dict) else {}
+            self._record_success("fetch")
+            return data
         except Exception as exc:
             self._connection_status = "disconnected"
-            self._get_logger().warning("拉取电脑端数据失败: %s", exc)
+            self._record_failure("fetch", f"拉取电脑端数据失败: {type(exc).__name__}")
             return {}
 
     async def _resolve_stream(self) -> str:
-        """解析主动说话目标对应的真实聊天流 ID（带缓存）。"""
+        generation = self._generation
+        if not self._is_active(generation):
+            return ""
         if self._stream_id:
             return self._stream_id
-
+        if not self._can_retry("stream"):
+            return ""
         target = self.config.target
+        stream_id = ""
         try:
             if target.chat_type == "group":
-                result = await self.ctx.chat.get_stream_by_group_id(target.group_id, platform=target.platform)
+                call = self.ctx.chat.get_stream_by_group_id(target.group_id, platform=target.platform)
             else:
-                result = await self.ctx.chat.get_stream_by_user_id(target.user_id, platform=target.platform)
+                call = self.ctx.chat.get_stream_by_user_id(target.user_id, platform=target.platform)
+            result = await asyncio.wait_for(call, timeout=SDK_TIMEOUT_SECONDS)
             stream_id = _extract_stream_id(result)
-            if stream_id:
-                self._stream_id = stream_id
-                self._get_logger().info("已解析主动说话目标聊天流: %s", stream_id)
-                return stream_id
-        except Exception as exc:
-            self._get_logger().warning("按 ID 查找聊天流失败，尝试打开会话: %s", exc)
-
-        # 回退：打开或创建聊天流
-        try:
-            result = await self.ctx.chat.open_session(
-                platform=target.platform,
-                chat_type=target.chat_type,
-                user_id=target.user_id if target.chat_type == "private" else "",
-                group_id=target.group_id if target.chat_type == "group" else "",
-            )
-            stream_id = _extract_stream_id(result)
-            if stream_id:
-                self._stream_id = stream_id
-                self._get_logger().info("已打开主动说话目标聊天流: %s", stream_id)
-                return stream_id
-        except Exception as exc:
-            self._get_logger().error("打开目标聊天流失败: %s", exc)
-
-        return ""
-
-
-# ----------------------------------------------------------------------
-# 工具函数
-# ----------------------------------------------------------------------
+        except Exception:
+            pass  # 同一轮先尝试回退；两种方式均失败后再记录一次退避。
+        if not self._is_active(generation):
+            return ""
+        if not stream_id:
+            try:
+                result = await asyncio.wait_for(self.ctx.chat.open_session(
+                    platform=target.platform, chat_type=target.chat_type,
+                    user_id=target.user_id if target.chat_type == "private" else "",
+                    group_id=target.group_id if target.chat_type == "group" else "",
+                ), timeout=SDK_TIMEOUT_SECONDS)
+                stream_id = _extract_stream_id(result)
+            except Exception:
+                pass
+        if not self._is_active(generation):
+            return ""  # 旧代查询不得写入新目标的聊天流缓存。
+        if stream_id:
+            self._stream_id = stream_id
+            self._record_success("stream")
+        else:
+            self._record_failure("stream", "无法解析目标聊天流")
+        return stream_id
 
 
 _OPS: dict[str, Callable[[float, float], bool]] = {
-    ">=": operator.ge,
-    ">": operator.gt,
-    "<=": operator.le,
-    "<": operator.lt,
-    "==": operator.eq,
+    ">=": operator.ge, ">": operator.gt, "<=": operator.le, "<": operator.lt, "==": operator.eq,
 }
 
 
+def _build_endpoint_url(data_url: str, endpoint: str) -> str:
+    """只替换最终路径段，保留反向代理前缀与查询参数，移除 HTTP 不发送的 fragment。"""
+    parts = urlsplit(data_url)
+    path = parts.path.rstrip("/")
+    if parts.scheme not in {"http", "https"} or not parts.hostname or path.rsplit("/", 1)[-1] != "merged-data":
+        raise ValueError("source.data_url 必须是 HTTP(S) /merged-data 接口地址")
+    if parts.username is not None or parts.password is not None:
+        raise ValueError("source.data_url 不允许内嵌账号密码，请使用 token")
+    try:
+        parts.port
+    except ValueError:
+        raise ValueError("source.data_url 端口无效") from None
+    path = path.rsplit("/", 1)[0] + "/" + endpoint.lstrip("/")
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
+
+
+def _validate_config(config: MizukiSensorConfig) -> None:
+    """跨字段验证不依赖 SDK 的特定 Pydantic 版本；无效配置暂停而不是静默忽略规则。"""
+    _build_endpoint_url(config.source.data_url, "health")
+    if config.source.fetch_interval < 100 or config.proactive.cooldown_ms < 60000:
+        raise ValueError("fetch_interval 至少 100ms，cooldown_ms 至少 60000ms")
+    target = config.target
+    if target.chat_type not in {"private", "group"}:
+        raise ValueError("target.chat_type 必须为 private 或 group")
+    target_id = target.user_id if target.chat_type == "private" else target.group_id
+    if config.plugin.enabled and (not target.platform.strip() or not target_id.strip()):
+        raise ValueError("启用前请填写目标平台及对应的 user_id/group_id")
+    keys = set()
+    for rule in config.rules.table:
+        if not rule.key.strip() or rule.key != rule.key.strip() or rule.key in keys:
+            raise ValueError("规则 key 必须非空、无首尾空白且不可重复")
+        keys.add(rule.key)
+        if not rule.field or any(not part.strip() or part != part.strip() for part in rule.field.split(".")):
+            raise ValueError("规则 field 必须为非空的点分字段路径")
+        if rule.field.split(".")[0] not in {"phone", "computer", "phone_connected"}:
+            raise ValueError("规则 field 必须指向 phone、computer 或 phone_connected")
+        if rule.op == "in":
+            if not isinstance(rule.value, list) or not rule.value:
+                raise ValueError("规则 in 的 value 必须为非空列表")
+        elif rule.op not in _OPS:
+            raise ValueError("规则 op 不受支持")
+        else:
+            try:
+                is_finite = math.isfinite(float(rule.value))
+            except (TypeError, ValueError, OverflowError):
+                is_finite = False
+            if not is_finite:
+                raise ValueError("数值规则的 value 必须为有限数值")
+        for template in (rule.situation, rule.intent):
+            if rule.enabled and not template.strip():
+                raise ValueError("启用规则的 situation 和 intent 不可为空")
+            try:
+                for _, field, spec, conversion in Formatter().parse(template):
+                    if field is not None and (field != "value" or "{" in spec or "}" in spec
+                                              or conversion not in {None, "s", "r", "a"}):
+                        raise ValueError("unsupported placeholder")
+            except ValueError:
+                raise ValueError("规则模板仅支持 {value} 占位符及其格式说明") from None
+
+
+def _build_current_data(data: dict[str, Any]) -> dict[str, Any]:
+    """仅构造插件决策视图；不改控制台数据契约或原始缓存。缺失在线标志也按离线处理。"""
+    phone = data.get("phone") if data.get("phone_connected") is True else {}
+    return {**data, "phone": phone if isinstance(phone, dict) else {}}
+
+
+def _result_accepted(result: Any) -> bool:
+    """保守的 SDK 确认边界，不把“未抛异常”或任意非空对象视为受理。
+
+    仅识别 True、明确的 accepted/success/ok=True 或成功 status；失败标志优先。
+    None、空对象和未知结构均不确认，进入有限退避。实际 SDK 若使用其他返回模型，
+    须根据其公开契约在此适配并补集成测试，不能通过猜测放宽为成功。
+    """
+    if result is True:
+        return True
+    if not isinstance(result, dict):
+        return False
+    flags = [result.get(key) for key in ("accepted", "success", "ok")]
+    status = str(result.get("status", "")).lower()
+    if any(flag is False for flag in flags) or result.get("error"):
+        return False
+    if status in {"error", "failed", "failure", "rejected", "denied", "cancelled"}:
+        return False
+    # 包装层 ok=True 不能覆盖内层的拒绝或未知结果；不推断 ticket/id 等字段的语义。
+    nested = [result[key] for key in ("data", "result") if key in result]
+    if nested and not all(_result_accepted(value) for value in nested):
+        return False
+    return (any(flag is True for flag in flags)
+            or status in {"ok", "success", "accepted", "queued"} or bool(nested))
+
+
 def _extract_field(data: dict[str, Any], path: str) -> Any:
-    """按点分路径从合并数据中取字段，任一层缺失返回 None。"""
+    """按点分路径取字段，任一层缺失返回 None。"""
     return reduce(lambda d, k: d.get(k) if isinstance(d, dict) else None, path.split("."), data)
 
 
 def _compare(actual: Any, op: str, expected: Any) -> bool:
-    """声明式规则的条件比较；op=in 为小写成员判定，其余为数值比较。"""
     if op == "in":
         if not isinstance(expected, list):
             return False
         return str(actual).lower() in {str(v).lower() for v in expected}
     try:
         left, right = float(actual), float(expected)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return False
-    return _OPS.get(op, lambda a, b: False)(left, right)
+    return math.isfinite(left) and math.isfinite(right) and _OPS.get(op, lambda a, b: False)(left, right)
 
 
 def _format_template(template: str, value: Any) -> str:
-    """渲染情境/意图模板，占位符 {value}；渲染失败返回原模板。"""
     display = int(value) if isinstance(value, float) and value.is_integer() else value
     try:
         return template.format(value=display)
-    except (KeyError, IndexError, ValueError):
+    except (KeyError, IndexError, ValueError, AttributeError):
         return template
 
 
 def _extract_stream_id(result: Any) -> str:
-    """从聊天流查询结果中提取 stream_id。"""
     stream = result
     if isinstance(result, dict) and isinstance(result.get("stream"), dict):
         stream = result["stream"]
@@ -446,5 +597,4 @@ def _extract_stream_id(result: Any) -> str:
 
 
 def create_plugin() -> MizukiSensorPlugin:
-    """创建 Mizuki 插件实例。"""
     return MizukiSensorPlugin()

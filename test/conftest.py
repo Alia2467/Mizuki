@@ -1,5 +1,4 @@
-"""pytest 配置：为测试提供 FastAPI TestClient 共享 fixtures。"""
-
+"""Isolated HTTP fixtures; importing server never reads real configuration."""
 import json
 import sys
 from pathlib import Path
@@ -7,39 +6,41 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-# 把 desktop/ 加入 sys.path，让 import server / collector / database 能找到
 _desktop = Path(__file__).resolve().parent.parent / "Mizuki" / "desktop"
 if str(_desktop) not in sys.path:
     sys.path.insert(0, str(_desktop))
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture()
 def _isolate_config(tmp_path, monkeypatch):
-    """每个测试用独立的 config.json 和 data/，不污染真实文件。"""
     import server
-
-    cfg_path = tmp_path / "config.json"
-    db_file = tmp_path / "data" / "collected.db"
-    db_file.parent.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(server, "CONFIG_PATH", cfg_path)
-    # 重新加载默认配置到临时路径
-    server.config.update(server.DEFAULT_CONFIG)
-    cfg_path.write_text(
-        json.dumps(server.DEFAULT_CONFIG, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    # 重建 database 指向临时文件
+    from collector import ComputerCollector
     from database import DataCollector
+    from collections import OrderedDict
 
-    server.storage = DataCollector(db_file=db_file)
-    server.storage.start()
+    monkeypatch.delenv("MIZUKI_TOKEN", raising=False)
+    monkeypatch.setattr(server, "CONFIG_PATH", tmp_path / "config.json")
+    monkeypatch.setattr(server, "app_dir", lambda: tmp_path)
+    monkeypatch.setattr(server, "config", dict(server.DEFAULT_CONFIG))
+    monkeypatch.setattr(server, "collector", ComputerCollector(interval=0.3))
+    monkeypatch.setattr(server, "_latest_phone", {})
+    monkeypatch.setattr(server, "_phone_received_at", None)
+    monkeypatch.setattr(server, "_phone_received_monotonic", None)
+    monkeypatch.setattr(server, "_phone_orders", OrderedDict())
+    monkeypatch.setattr(server, "_plugin_heartbeats", {})
+    monkeypatch.setattr(server, "_rate_windows", OrderedDict())
+    monkeypatch.setattr(server, "_last_computer_key", None)
+    server.CONFIG_PATH.write_text(json.dumps(server.DEFAULT_CONFIG), encoding="utf-8")
+    database = DataCollector(db_file=tmp_path / "data" / "collected.db")
+    monkeypatch.setattr(server, "storage", database)
+    assert database.start()
     yield
-    server.storage.stop()
+    server.collector.stop()
+    assert database.stop()
 
 
 @pytest.fixture()
-def client():
-    """返回 FastAPI TestClient（同步）。"""
+def client(_isolate_config):
     import server
-    return TestClient(server.app)
+    with TestClient(server.app) as test_client:
+        yield test_client

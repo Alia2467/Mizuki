@@ -108,7 +108,7 @@ html.dark body::before {
 .page {
   width: 96vw;
   max-width: 1600px;
-  min-width: 600px;
+  min-width: 0;
   margin: 0 auto;
   padding: 2vh 0.5vw 3vh;
 }
@@ -825,6 +825,96 @@ html.dark body::before {
   font-size: 12px;
 }
 
+/* ---------- 令牌登录与状态提示 ---------- */
+[hidden] {
+  display: none !important;
+}
+
+button:disabled,
+input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.auth-status,
+.field-note {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 520px;
+  margin: 6vh auto;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.auth-form label {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.auth-input-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.auth-input-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--card-bg);
+}
+
+.auth-msg {
+  min-height: 1.5em;
+  color: var(--off);
+  font-size: 13px;
+}
+
+.data-notice {
+  color: var(--warn);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
+.data-notice:empty {
+  display: none;
+}
+
+.status-pill.unknown {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.export-msg.error {
+  color: var(--off);
+}
+
+.history-bar.is-zero {
+  background: var(--text-muted);
+  opacity: 0.5;
+}
+
 /* ---------- 响应式断点 ---------- */
 @media (max-width: 1024px) {
   .grid {
@@ -859,10 +949,21 @@ html.dark body::before {
     flex-direction: column;
     align-items: flex-start;
   }
+  .topbar-right,
+  .export-actions {
+    flex-wrap: wrap;
+  }
+  .card-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
   .settings-form {
     flex-direction: column;
+    align-items: stretch;
   }
   .settings-form .field {
+    flex: 1 1 auto;
+    width: 100%;
     max-width: 100%;
   }
 }

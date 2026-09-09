@@ -1,6 +1,6 @@
 package com.mizuki.sensor
 
-import android.app.Notification
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -10,766 +10,679 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.graphics.BitmapFactory
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.location.Address
 import android.location.Geocoder
+import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
+import android.provider.Settings
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
-import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.gson.Gson
 import com.google.gson.JsonObject
-import kotlinx.coroutines.runBlocking
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.MediaType.Companion.toMediaType
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import java.io.IOException
-import java.text.SimpleDateFormat
-import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
-import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 
-/**
- * Mizuki — 后台采集服务（前台服务）
- *
- * 采集：GPS/城市、天气（Open-Meteo）、健康（Health Connect + 计步传感器）、
- * 前台应用、导航/通话/听音乐状态，并 HTTP POST 到电脑端。
- */
+/** 实时上传、慢速采集与历史补传各自串行；同一服务运行期使用不可变连接配置和会话。 */
 class SensorService : Service(), SensorEventListener {
-
-    private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private lateinit var sensorManager: SensorManager
-    private var stepCounter: Sensor? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private val rootJob = SupervisorJob()
+    private val scope = CoroutineScope(rootJob + Dispatchers.Main.immediate)
+    private val executor = Executors.newSingleThreadExecutor { Thread(it, "sensor-upload") }
+    private val metadataExecutor = Executors.newSingleThreadExecutor { Thread(it, "sensor-metadata") }
+    private val replayExecutor = Executors.newSingleThreadExecutor { Thread(it, "sensor-replay") }
+    private val uploadDispatcher = executor.asCoroutineDispatcher()
+    private val metadataDispatcher = metadataExecutor.asCoroutineDispatcher()
+    private val replayDispatcher = replayExecutor.asCoroutineDispatcher()
+    private val gate = CollectionGate()
+    private val sequence = UploadSequence()
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(20, TimeUnit.SECONDS)
         .build()
+    private val calls = SensorCalls(client::newCall)
     private val gson = Gson()
-    private val handler = Handler(Looper.getMainLooper())
-    private val executor = Executors.newSingleThreadExecutor()
-
-    private var targetUrl = ""
-    private var authToken = ""
-    private var intervalMs = 300
-    private var baseIntervalMs = 300  // 用户配置的基准间隔（退避恢复后回到此值）
-    private var backoffMultiplier = 1  // 指数退避倍数（1 = 正常间隔）
-    private var stepBaseline = -1L
-    private var lastSteps = 0L
-
-    // 天气缓存 + 最近一次有效位置（室内 GPS 失效时兜底）
-    private var cachedWeather: Triple<String, Int, Int>? = null
-    private var cachedWeatherTime = 0L
-    private var lastLat: Double? = null
-    private var lastLng: Double? = null
-    private var lastCity = "未知"
-
-    // 自诊断状态
-    private var startTimeMillis = 0L
+    private val prefs by lazy { getSharedPreferences("mizuki", Context.MODE_PRIVATE) }
+    private val stepPrefs by lazy { getSharedPreferences("mizuki_steps", Context.MODE_PRIVATE) }
+    private lateinit var config: SensorConfig
+    private lateinit var pendingStore: PendingStore
+    private lateinit var sensorManager: SensorManager
+    private var healthConnectClient: HealthConnectClient? = null
+    private var hasStarted = false
+    private var backoffMultiplier = 1
+    private var startElapsed = 0L
     private var sendSuccess = 0
     private var sendFailed = 0
     private var lastError = ""
-
-    private val prefs by lazy { getSharedPreferences("mizuki_steps", Context.MODE_PRIVATE) }
-
-    /** 离线补传队列：发送失败的载荷暂存本地，恢复后自动补传。 */
-    private val pendingStore by lazy { PendingStore(applicationContext) }
-
-    /** Health Connect 客户端缓存（懒初始化，避免每次 fetchHealth 重复创建）。 */
-    private var healthConnectClient: HealthConnectClient? = null
-
-    /** 导航/音乐 App 包名集合（从资源加载，可配置）。 */
     private var navPackages: Set<String> = emptySet()
     private var musicPackages: Set<String> = emptySet()
 
-    private val collectRunnable = object : Runnable {
-        override fun run() {
-            collectAndSend()
-            // 指数退避：连续失败时拉长间隔，上限 MAX_BACKOFF_MULTIPLIER
-            val nextInterval = baseIntervalMs * backoffMultiplier
-            handler.postDelayed(this, nextInterval)
-        }
-    }
+    private data class Position(val lat: Double?, val lng: Double?, val city: String = "未知")
+    private data class Health(val heart: Int = 0, val steps: Long? = null, val sleep: Double = 0.0, val day: String = "")
+    @Volatile private var position = Position(null, null)
+    private val weather = WeatherCache(WEATHER_CACHE_MS, WEATHER_RETRY_MS)
+    @Volatile private var health = Health()
+    @Volatile private var stepState = StepState()
+    @Volatile private var foregroundPackage = ""
+    private var foregroundApp = "未知"
+    private var nextForegroundCheck = 0L
+    private var nextLocationCheck = 0L
+    private var nextCityCheck = 0L
+    @Volatile private var nextHealthCheck = 0L
+    private var bootCount = -1
+
+    private val collectRunnable = Runnable { collectAndSend() }
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
-        startTimeMillis = System.currentTimeMillis()
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        // 不在 onCreate 提前注册需要运行时权限的传感器，也不在前台化成功前公布运行状态。
+        pendingStore = PendingStore(applicationContext)
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
-        stepCounter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-        stepCounter?.let { sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) }
-        startForeground()
-        // 从资源加载包名集合（可配置）
         navPackages = resources.getStringArray(R.array.nav_packages).toSet()
         musicPackages = resources.getStringArray(R.array.music_packages).toSet()
+        bootCount = try { Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, -1) } catch (_: Exception) { -1 }
+        stepState = StepState(stepPrefs.getString("day", "") ?: "", stepPrefs.getInt("boot", -1),
+            stepPrefs.getLong("counter", -1), stepPrefs.getLong("total", 0))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val ip = intent?.getStringExtra(EXTRA_IP) ?: DEFAULT_IP
-        val port = intent?.getIntExtra(EXTRA_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
-        intervalMs = (intent?.getIntExtra(EXTRA_INTERVAL, DEFAULT_INTERVAL) ?: DEFAULT_INTERVAL).coerceAtLeast(100)
-        baseIntervalMs = intervalMs
-        backoffMultiplier = 1
-        authToken = intent?.getStringExtra(EXTRA_TOKEN) ?: ""
-        targetUrl = "http://$ip:$port/phone-data"
-        Log.i(TAG, "开始采集 → $targetUrl，间隔 ${intervalMs}ms")
-
-        handler.removeCallbacks(collectRunnable)
-        handler.post(collectRunnable)
+        if (gate.isStopped) { stopSelf(); return START_NOT_STICKY }
+        if (hasStarted) { collectAndSend(); return START_STICKY }
+        try {
+            config = loadConfig(intent)
+            check(startForeground()) { "请授予定位或运动识别权限后再连接" }
+        } catch (e: Exception) {
+            startupError = e.message ?: "采集服务启动失败"
+            Log.e(TAG, startupError)
+            stopCollection()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        hasStarted = true
+        startElapsed = SystemClock.elapsedRealtime()
+        instance = this
+        isRunning = true
+        isConnected = false
+        startupError = ""
+        prefs.edit().putBoolean("service_running", true)
+            .putString("active_ip", config.host).putString("active_port", config.port.toString())
+            .putString("active_interval", config.intervalMs.toString()).putString("active_token", config.token).apply()
+        if (hasMotionPermission(this)) {
+            try {
+                sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)?.let {
+                    sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+                }
+            } catch (e: Exception) { Log.w(TAG, "计步传感器不可用", e) }
+        }
+        Log.i(TAG, "开始采集 → ${config.uploadUrl()}，间隔 ${config.intervalMs}ms")
+        scope.launch(metadataDispatcher) { collectMetadata() }
+        scope.launch(replayDispatcher) { sendPending() }
+        collectAndSend()
         return START_STICKY
+    }
+
+    private fun loadConfig(intent: Intent?): SensorConfig {
+        val saved = listOf("ip", "port", "interval", "token").associateWith { key ->
+            prefs.getString("active_$key", prefs.getString(key, null))
+        }.mapNotNull { (key, value) -> value?.let { key to it } }.toMap()
+        val explicit = mutableMapOf<String, String>()
+        if (intent?.hasExtra(EXTRA_IP) == true) explicit["ip"] = intent.getStringExtra(EXTRA_IP) ?: ""
+        if (intent?.hasExtra(EXTRA_PORT) == true) explicit["port"] = intent.getIntExtra(EXTRA_PORT, DEFAULT_PORT).toString()
+        if (intent?.hasExtra(EXTRA_INTERVAL) == true) explicit["interval"] = intent.getIntExtra(EXTRA_INTERVAL, DEFAULT_INTERVAL).toString()
+        if (intent?.hasExtra(EXTRA_TOKEN) == true) explicit["token"] = intent.getStringExtra(EXTRA_TOKEN) ?: ""
+        return SensorConfig.resolve(explicit, saved)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private var consecutiveFailures = 0
+    /** 先关闭门控并取消全部请求，再取消协程/排队工作；迟到回调只能观察取消状态。 */
+    private fun stopCollection() {
+        if (gate.isStopped) return
+        gate.stop()
+        calls.stop()
+        scope.cancel()
+        handler.removeCallbacksAndMessages(null)
+        sensorManager.unregisterListener(this)
+        val cancelledTasks = executor.shutdownNow() + metadataExecutor.shutdownNow() + replayExecutor.shutdownNow()
+        uploadDispatcher.close()
+        metadataDispatcher.close()
+        replayDispatcher.close()
+        if (instance === this || instance == null) {
+            instance = null
+            isRunning = false
+            isConnected = false
+            latestData = null
+            dailyForecast = null
+            prefs.edit().putBoolean("service_running", false).apply()
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        // 等被取消的使用者退出后再关闭数据库；清理不阻塞主线程，也不会重新开放数据库。
+        CoroutineScope(Dispatchers.IO).launch {
+            // shutdownNow 排出的已取消续体仍需执行取消清理，否则其 Job 无法结束。
+            cancelledTasks.forEach { task -> runCatching { task.run() } }
+            rootJob.join()
+            pendingStore.close()
+            client.connectionPool.evictAll()
+        }
+    }
 
     override fun onDestroy() {
-        handler.removeCallbacks(collectRunnable)
-        stepCounter?.let { sensorManager.unregisterListener(this) }
-        executor.shutdown()
-        instance = null
-        // 服务销毁时同步状态，确保 UI 不残留「已连接」（异常中断场景）
-        getSharedPreferences("mizuki", Context.MODE_PRIVATE)
-            .edit().putBoolean("service_running", false).apply()
+        stopCollection()
         super.onDestroy()
     }
 
-    // ------------------------------------------------------------------
-    // 前台通知
-    // ------------------------------------------------------------------
-    private fun startForeground() {
+    private fun startForeground(): Boolean {
+        val types = foregroundTypes(this)
+        if (types == 0 && Build.VERSION.SDK_INT >= 34) return false
         val channelId = "mizuki_sensor"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "海月之音",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            channel.description = "海月之音正在后台采集数据"
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
-        }
-
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val largeIcon = BitmapFactory.decodeResource(resources, R.mipmap.ic_launcher)
-        val notification: Notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("海月之音 运行中")
-            .setContentText("正在采集并上报数据…")
-            // 小图标必须用单色矢量；mipmap 彩色位图在部分系统上渲染异常
-            .setSmallIcon(R.drawable.ic_notification)
-            .setLargeIcon(largeIcon)
-            .setContentIntent(pendingIntent)
-            .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .build()
-
-        // Android 14+（API 34）要求 startForeground 显式指定前台服务类型，否则抛 MissingForegroundServiceTypeException；
-        // 权限未授予时抛 SecurityException，必须兜底，遵循「降级胜于中断」。
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(
-                    NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
-                )
-            } else {
-                startForeground(NOTIFICATION_ID, notification)
-            }
-        } catch (e: SecurityException) {
-            Log.e(TAG, "前台服务启动失败（权限未授予）: ${e.message}")
-        }
+        val channel = NotificationChannel(channelId, "海月之音", NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val pendingIntent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("海月之音 运行中").setContentText("正在采集并上报数据…")
+            .setSmallIcon(R.drawable.ic_notification).setContentIntent(pendingIntent).setOngoing(true).build()
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, types)
+        return true
     }
 
-    // ------------------------------------------------------------------
-    // 采集与上报
-    // ------------------------------------------------------------------
+    /** 完成（含失败）后才调度下一次；所有刷新都走同一门控，没有无限 HTTP enqueue 队列。 */
     private fun collectAndSend() {
-        if (hasPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)) {
+        if (!hasStarted || !gate.collect()) return
+        handler.removeCallbacks(collectRunnable)
+        scope.launch(uploadDispatcher) {
             try {
-                // 低频定位策略：默认平衡功耗，仅导航中才提高精度
-                val priority = if (isNavigationPackage(currentForegroundPackage()))
-                    Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
-                fusedLocationClient.getCurrentLocation(priority, null).addOnSuccessListener { location ->
-                    // Geocoder 反解与网络请求同属阻塞 I/O，一律进采集单线程池，不占主线程
-                    executor.execute {
-                        var lat = location?.latitude
-                        var lng = location?.longitude
-                        // Fused 拿不到 → 系统 LocationManager 兜底（应对无 Google Play Services 的设备）
-                        if (lat == null || lng == null) {
-                            systemLastKnownLocation()?.let { (fLat, fLng) ->
-                                lat = fLat
-                                lng = fLng
-                            }
-                        }
-                        // 闭包内可变局部量无法 smart cast，先固化再使用
-                        val fixLat = lat
-                        val fixLng = lng
-                        if (fixLat != null && fixLng != null) {
-                            lastLat = fixLat
-                            lastLng = fixLng
-                            lastCity = reverseGeocodeCity(fixLat, fixLng)
-                        }
-                        // GPS 拿不到就用上一次有效位置
-                        val effLat = fixLat ?: lastLat
-                        val effLng = fixLng ?: lastLng
-                        val effCity = if (lastLat != null) lastCity else "未知"
-                        buildAndSend(effLat, effLng, effCity)
-                    }
-                }.addOnFailureListener {
-                    fallbackAndSend()
-                }
-            } catch (e: SecurityException) {
-                fallbackAndSend()
+                currentCoroutineContext().ensureActive()
+                buildAndSend()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                // 无 GMS 设备上 Fused 客户端可能完全不可用
-                Log.d(TAG, "Fused Location 不可用，改用系统定位: ${e.message}")
-                fallbackAndSend()
-            }
-        } else {
-            fallbackAndSend()
-        }
-    }
-
-    /** 定位兜底链：系统 LocationManager 最近位置 → 上次有效位置 → 未知。 */
-    private fun fallbackAndSend() {
-        executor.execute {
-            systemLastKnownLocation()?.let { (lat, lng) ->
-                lastLat = lat
-                lastLng = lng
-                lastCity = reverseGeocodeCity(lat, lng)
-            }
-            buildAndSend(lastLat, lastLng, if (lastLat != null) lastCity else "未知")
-        }
-    }
-
-    /** 系统 LocationManager 最近位置兜底（不依赖 Google Play Services）。 */
-    private fun systemLastKnownLocation(): Pair<Double, Double>? {
-        return try {
-            val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-            for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
-                try {
-                    val loc = lm.getLastKnownLocation(provider)
-                    if (loc != null) return loc.latitude to loc.longitude
-                } catch (_: SecurityException) {
-                } catch (_: Exception) {
+                currentCoroutineContext().ensureActive()
+                lastError = e.message ?: "采集失败"
+                Log.e(TAG, lastError, e)
+                backoffMultiplier = (backoffMultiplier * 2).coerceAtMost(MAX_BACKOFF_MULTIPLIER)
+            } finally {
+                gate.finish()
+                if (!gate.isStopped) handler.post {
+                    if (!gate.isStopped) handler.postDelayed(collectRunnable,
+                        (config.intervalMs * backoffMultiplier).coerceAtMost(SensorConfig.MAX_INTERVAL_MS))
                 }
             }
-            null
-        } catch (e: Exception) {
-            null
         }
     }
 
-    private fun buildAndSend(lat: Double?, lng: Double?, city: String) {
-        val foregroundApp = currentForegroundApp()
-        val packageName = currentForegroundPackage()
-        val weather = fetchWeather(lat, lng)   // (condition, temperature, humidity)
-        val health = fetchHealth()             // (heartRate, steps, sleepHours)
-
+    private suspend fun buildAndSend() {
+        collectForeground()
+        val stamp = sequence.snapshot()
+        val loc = position
+        val weatherNow = weather.value
+        val healthNow = health
+        val appPackage = foregroundPackage
+        val steps = healthNow.steps.takeIf { healthNow.day == LocalDate.now().toString() } ?: stepsToday()
         val data = mapOf(
             "device_id" to Build.MODEL,
-            "timestamp" to SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault()).format(Date()),
-            "location" to mapOf(
-                "city" to city,
-                "latitude" to (lat ?: 0.0),
-                "longitude" to (lng ?: 0.0)
-            ),
-            "weather" to mapOf(
-                "condition" to weather.first,
-                "temperature" to weather.second,
-                "humidity" to weather.third
-            ),
-            "health" to mapOf(
-                "heart_rate" to health.first,
-                "steps" to health.second,
-                "sleep_hours" to health.third
-            ),
-            "usage" to mapOf(
-                "foreground_app" to foregroundApp,
-                "is_navigating" to isNavigationPackage(packageName),
-                "is_calling" to isCalling(),
-                "is_listening_music" to isMusicPackage(packageName),
-                "music_app" to if (isMusicPackage(packageName)) foregroundApp else "",
-                "screen_text" to ""
-            ),
+            "timestamp" to DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss", Locale.ROOT).format(java.time.LocalDateTime.now()),
+            "location" to mapOf("city" to loc.city, "latitude" to (loc.lat ?: 0.0), "longitude" to (loc.lng ?: 0.0)),
+            "weather" to mapOf("condition" to weatherNow.first, "temperature" to weatherNow.second, "humidity" to weatherNow.third),
+            "health" to mapOf("heart_rate" to healthNow.heart, "steps" to steps, "sleep_hours" to healthNow.sleep),
+            "usage" to mapOf("foreground_app" to foregroundApp, "is_navigating" to (appPackage in navPackages),
+                "is_calling" to isCalling(), "is_listening_music" to (appPackage in musicPackages),
+                "music_app" to if (appPackage in musicPackages) foregroundApp else "", "screen_text" to ""),
             "diagnostics" to buildDiagnostics()
         )
-
-        latestData = data
-        send(gson.toJson(data))
-    }
-
-    /** 4xx 属永久性拒收（请求非法/鉴权失败），重试不会成功，不入离线队列。 */
-    private fun isPermanentReject(code: Int): Boolean = code in 400..499
-
-    private fun send(json: String) {
-        val body = json.toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = buildRequest(body)
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                sendFailed++
-                lastError = e.message ?: "连接失败"
-                Log.e(TAG, "上报失败: $lastError")
-                consecutiveFailures++
-                // 指数退避：连续失败时加倍间隔（上限 MAX_BACKOFF_MULTIPLIER），不停止服务
-                if (backoffMultiplier < MAX_BACKOFF_MULTIPLIER) {
-                    backoffMultiplier *= 2
-                    Log.w(TAG, "连续失败 $consecutiveFailures 次，退避倍数 ×$backoffMultiplier（间隔 ${baseIntervalMs * backoffMultiplier}ms）")
-                } else {
-                    Log.e(TAG, "连续失败 $consecutiveFailures 次，已达最大退避")
-                }
-                pendingStore.enqueue(json)
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                if (response.isSuccessful) {
-                    sendSuccess++
-                    // 成功时重置退避
-                    if (consecutiveFailures > 0 || backoffMultiplier > 1) {
-                        consecutiveFailures = 0
-                        backoffMultiplier = 1
-                        Log.i(TAG, "连接恢复，重置退避")
-                    }
-                    Log.d(TAG, "上报成功")
-                    sendPending()
-                } else {
-                    sendFailed++
-                    lastError = "HTTP ${response.code}"
-                    Log.e(TAG, "上报失败: $lastError")
-                    if (isPermanentReject(response.code)) {
-                        // 永久拒收不累计失败次数（非网络问题）
-                        Log.e(TAG, "永久拒收，不累计连续失败")
-                    } else {
-                        consecutiveFailures++
-                        if (backoffMultiplier < MAX_BACKOFF_MULTIPLIER) {
-                            backoffMultiplier *= 2
-                            Log.w(TAG, "连续失败 $consecutiveFailures 次，退避倍数 ×$backoffMultiplier")
-                        }
-                    }
-                    if (!isPermanentReject(response.code)) pendingStore.enqueue(json)
-                }
-                response.close()
-            }
-        })
-    }
-
-    /** 构造上报请求（配置了 token 时携带鉴权头）。 */
-    private fun buildRequest(body: RequestBody): Request {
-        val builder = Request.Builder().url(targetUrl).post(body)
-        if (authToken.isNotEmpty()) builder.addHeader("X-Sensor-Token", authToken)
-        return builder.build()
-    }
-
-    /** 补传离线队列：单线程池内同步发送，每轮最多 5 条，失败即停下轮再试。 */
-    private fun sendPending() {
-        executor.execute { sendPendingSync() }
-    }
-
-    private fun sendPendingSync() {
-        var sent = 0
-        while (sent < 5) {
-            val items = pendingStore.peek(1)
-            if (items.isEmpty()) break
-            val (id, payload) = items.first()
-            try {
-                val body = payload.toRequestBody("application/json; charset=utf-8".toMediaType())
-                client.newCall(buildRequest(body)).execute().use { resp ->
-                    if (resp.isSuccessful) {
-                        pendingStore.remove(id)
-                        sent++
-                    } else if (isPermanentReject(resp.code)) {
-                        // 永久拒收的载荷丢弃，避免无限重试
-                        pendingStore.remove(id)
-                        Log.e(TAG, "补传被永久拒收: HTTP ${resp.code}，丢弃该条")
-                    } else {
-                        Log.e(TAG, "补传失败: HTTP ${resp.code}，下轮重试")
-                        return
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "补传失败: ${e.message}，下轮重试")
+        currentCoroutineContext().ensureActive()
+        // 发布放回主线程，确保 stopCollection 之后旧运行期不再写 UI 的全局快照。
+        handler.post { if (!gate.isStopped && instance === this) latestData = data }
+        val json = gson.toJson(data)
+        val request = buildUploadRequest(config, json, stamp)
+        var shouldStore: Boolean
+        try {
+            val code = calls.fetch(request) { it.code }
+            currentCoroutineContext().ensureActive()
+            if (code in 200..299) {
+                sendSuccess++
+                lastError = ""
+                backoffMultiplier = 1
+                handler.post { if (!gate.isStopped && instance === this) isConnected = true }
                 return
             }
+            lastError = "HTTP $code"
+            shouldStore = !isPermanentReject(code)
+        } catch (e: IOException) {
+            currentCoroutineContext().ensureActive()
+            lastError = e.message ?: "连接失败"
+            shouldStore = true
         }
-        if (sent > 0) Log.i(TAG, "离线补传成功 $sent 条")
+        currentCoroutineContext().ensureActive()
+        sendFailed++
+        backoffMultiplier = (backoffMultiplier * 2).coerceAtMost(MAX_BACKOFF_MULTIPLIER)
+        handler.post { if (!gate.isStopped && instance === this) isConnected = false }
+        Log.w(TAG, "上报失败: $lastError")
+        if (shouldStore && !gate.isStopped) pendingStore.enqueue(json)
     }
 
-    // ------------------------------------------------------------------
-    // 天气（Open-Meteo，无需 API Key）
-    // ------------------------------------------------------------------
-    private fun fetchWeather(lat: Double?, lng: Double?): Triple<String, Int, Int> {
-        val now = System.currentTimeMillis()
-        // 天气 15 分钟内用缓存，避免频繁请求
-        if (cachedWeather != null && now - cachedWeatherTime < 15 * 60 * 1000L) {
-            return cachedWeather!!
-        }
-        val result = try {
-            // 有 GPS 用坐标，没有则用 IP 定位兜底
-            var wLat = lat
-            var wLng = lng
-            if (wLat == null || wLng == null) {
-                val ip = ipGeolocation()
-                if (ip != null) {
-                    wLat = ip.first
-                    wLng = ip.second
-                }
+    /** 独立单线程，每次只补一条，完成后至少等一秒；实时上传失败时暂停补传。 */
+    private suspend fun sendPending() {
+        while (currentCoroutineContext().isActive) {
+            delay(REPLAY_INTERVAL_MS)
+            if (!isConnected || gate.isStopped) continue
+            try {
+                val item = pendingStore.peek(1).firstOrNull() ?: continue
+                val request = buildUploadRequest(config, item.second, isReplay = true)
+                val code = calls.fetch(request) { it.code }
+                currentCoroutineContext().ensureActive()
+                if (code in 200..299 || isPermanentReject(code)) pendingStore.remove(item.first)
+                else delay(REPLAY_FAILURE_MS)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                Log.w(TAG, "历史补传暂缓: ${e.message}")
+                delay(REPLAY_FAILURE_MS)
             }
-            if (wLat == null || wLng == null) return Triple("unknown", 0, 0)
-            val request = Request.Builder().url(
-                "https://api.open-meteo.com/v1/forecast?latitude=$wLat&longitude=$wLng&current=temperature_2m,relative_humidity_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=7"
-            ).build()
-            client.newCall(request).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val body = resp.body?.string()
-                    if (body != null) {
-                        val json = gson.fromJson(body, JsonObject::class.java)
-                        val cur = json.getAsJsonObject("current")
-                        // 解析 7 天预报
-                        try {
-                            val daily = json.getAsJsonObject("daily")
-                            val times = daily.getAsJsonArray("time")
-                            val codes = daily.getAsJsonArray("weather_code")
-                            val maxs = daily.getAsJsonArray("temperature_2m_max")
-                            val mins = daily.getAsJsonArray("temperature_2m_min")
-                            val list = mutableListOf<Map<String, Any>>()
-                            for (i in 0 until times.size()) {
-                                list.add(
-                                    mapOf(
-                                        "date" to times.get(i).asString,
-                                        "code" to codes.get(i).asInt,
-                                        "max" to maxs.get(i).asDouble,
-                                        "min" to mins.get(i).asDouble
-                                    )
-                                )
+        }
+    }
+
+    /** 外部慢数据源从不占实时上传线程；使用单调时钟做缓存/失败冷却。 */
+    private suspend fun collectMetadata() {
+        while (currentCoroutineContext().isActive) {
+            try {
+                if (SystemClock.elapsedRealtime() >= nextLocationCheck) {
+                    nextLocationCheck = SystemClock.elapsedRealtime() + LOCATION_INTERVAL_MS
+                    collectLocation()
+                }
+                if (SystemClock.elapsedRealtime() >= nextHealthCheck) {
+                    nextHealthCheck = SystemClock.elapsedRealtime() + HEALTH_INTERVAL_MS
+                    fetchHealth()
+                }
+                if (weather.collect(SystemClock.elapsedRealtime())) fetchWeather()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                Log.w(TAG, "慢速采集失败，保留缓存: ${e.message}")
+            }
+            delay(METADATA_TICK_MS)
+        }
+    }
+
+    private suspend fun collectLocation() {
+        val fix = if (hasLocationPermission(this)) {
+            fetchFusedLocation() ?: systemLastKnownLocation() ?: fetchSystemLocation()
+        } else null
+        currentCoroutineContext().ensureActive()
+        if (fix != null) position = position.copy(lat = fix.latitude, lng = fix.longitude)
+        val loc = position
+        if (loc.lat != null && loc.lng != null && SystemClock.elapsedRealtime() >= nextCityCheck) {
+            nextCityCheck = SystemClock.elapsedRealtime() + CITY_INTERVAL_MS
+            val city = reverseGeocodeCity(loc.lat, loc.lng)
+            currentCoroutineContext().ensureActive()
+            if (city != null) position = position.copy(city = city)
+        }
+    }
+
+    private suspend fun fetchFusedLocation(): Location? = withTimeoutOrNull(LOCATION_TIMEOUT_MS) {
+        suspendCancellableCoroutine { continuation ->
+            val token = CancellationTokenSource()
+            continuation.invokeOnCancellation { token.cancel() }
+            try {
+                val priority = if (foregroundPackage in navPackages) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
+                LocationServices.getFusedLocationProviderClient(this@SensorService)
+                    .getCurrentLocation(priority, token.token)
+                    .addOnSuccessListener { if (continuation.isActive) continuation.resume(it) }
+                    .addOnFailureListener { if (continuation.isActive) continuation.resume(null) }
+                    .addOnCanceledListener { if (continuation.isActive) continuation.resume(null) }
+            } catch (e: Exception) { if (continuation.isActive) continuation.resume(null) }
+        }
+    }
+
+    private fun systemLastKnownLocation(): Location? = try {
+        val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).mapNotNull {
+            try { lm.getLastKnownLocation(it) } catch (_: Exception) { null }
+        }.filter { (SystemClock.elapsedRealtimeNanos() - it.elapsedRealtimeNanos) / 1000000 < LOCATION_MAX_AGE_MS }
+            .maxByOrNull { it.elapsedRealtimeNanos }
+    } catch (_: Exception) { null }
+
+    private suspend fun fetchSystemLocation(): Location? = withTimeoutOrNull(LOCATION_TIMEOUT_MS) {
+        suspendCancellableCoroutine { continuation ->
+            val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    try { lm.removeUpdates(this) } catch (_: Exception) {}
+                    if (continuation.isActive) continuation.resume(location)
+                }
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+                @Deprecated("Legacy callback")
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+            }
+            continuation.invokeOnCancellation { try { lm.removeUpdates(listener) } catch (_: Exception) {} }
+            try {
+                val provider = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+                    .firstOrNull { lm.isProviderEnabled(it) }
+                if (provider == null) continuation.resume(null)
+                else {
+                    @Suppress("DEPRECATION")
+                    lm.requestSingleUpdate(provider, listener, Looper.getMainLooper())
+                    if (!continuation.isActive) lm.removeUpdates(listener)
+                }
+            } catch (_: Exception) { if (continuation.isActive) continuation.resume(null) }
+        }
+    }
+
+    private suspend fun reverseGeocodeCity(lat: Double, lng: Double): String? {
+        if (!Geocoder.isPresent()) return null
+        return try {
+            val geocoder = Geocoder(this, Locale.CHINA)
+            val addresses = if (Build.VERSION.SDK_INT >= 33) {
+                withTimeoutOrNull(LOCATION_TIMEOUT_MS) {
+                    suspendCancellableCoroutine<List<Address>> { continuation ->
+                        geocoder.getFromLocation(lat, lng, 1, object : Geocoder.GeocodeListener {
+                            override fun onGeocode(addresses: MutableList<Address>) {
+                                if (continuation.isActive) continuation.resume(addresses)
                             }
-                            dailyForecast = list
-                        } catch (e: Exception) {
-                            dailyForecast = null
-                        }
-                        Triple(
-                            weatherCodeToCondition(cur.get("weather_code").asInt),
-                            cur.get("temperature_2m").asInt,
-                            cur.get("relative_humidity_2m").asInt
-                        )
-                    } else Triple("unknown", 0, 0)
-                } else Triple("unknown", 0, 0)
-            }
-        } catch (e: Exception) {
-            Triple("unknown", 0, 0)
-        }
-        if (result.first != "unknown") {
-            cachedWeather = result
-            cachedWeatherTime = now
-        }
-        return result
-    }
-
-    /** 无 GPS 时用 IP 定位获取坐标。 */
-    private fun ipGeolocation(): Pair<Double, Double>? {
-        return try {
-            val request = Request.Builder().url("https://ipapi.co/json/").build()
-            client.newCall(request).execute().use { resp ->
-                if (resp.isSuccessful) {
-                    val body = resp.body?.string()
-                    if (body != null) {
-                        val json = gson.fromJson(body, JsonObject::class.java)
-                        Pair(json.get("latitude").asDouble, json.get("longitude").asDouble)
-                    } else null
-                } else null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // 健康数据（Health Connect + 计步传感器兜底）
-    // ------------------------------------------------------------------
-    private fun fetchHealth(): Triple<Int, Long, Double> {
-        var heartRate = 0
-        var steps = lastSteps
-        var sleepHours = 0.0
-        try {
-            runBlocking {
-                val hc = healthConnectClient ?: HealthConnectClient.getOrCreate(this@SensorService).also { healthConnectClient = it }
-                val now = Instant.now()
-                val zone = ZoneId.systemDefault()
-                val startOfDay = now.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
-
-                // 心率（最近 6 小时内最新一条）
-                val hrResp = hc.readRecords(
-                    ReadRecordsRequest(
-                        recordType = HeartRateRecord::class,
-                        timeRangeFilter = TimeRangeFilter.between(now.minus(6, ChronoUnit.HOURS), now),
-                        ascendingOrder = false,
-                    )
-                )
-                heartRate = hrResp.records.firstOrNull()
-                    ?.samples?.lastOrNull()?.beatsPerMinute?.toInt() ?: 0
-
-                // 步数（今天累计）
-                val stepsResp = hc.readRecords(
-                    ReadRecordsRequest(
-                        recordType = StepsRecord::class,
-                        timeRangeFilter = TimeRangeFilter.between(startOfDay, now),
-                    )
-                )
-                val hcSteps = stepsResp.records.sumOf { it.count }
-                if (hcSteps > 0) steps = hcSteps
-
-                // 睡眠（最近 24 小时）
-                val sleepResp = hc.readRecords(
-                    ReadRecordsRequest(
-                        recordType = SleepSessionRecord::class,
-                        timeRangeFilter = TimeRangeFilter.between(now.minus(24, ChronoUnit.HOURS), now),
-                    )
-                )
-                val totalMillis = sleepResp.records.sumOf {
-                    Duration.between(it.startTime, it.endTime).toMillis()
+                            override fun onError(errorMessage: String?) {
+                                if (continuation.isActive) continuation.resume(emptyList())
+                            }
+                        })
+                    }
                 }
-                sleepHours = totalMillis / 3600000.0
+            } else {
+                @Suppress("DEPRECATION")
+                geocoder.getFromLocation(lat, lng, 1)
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "读取健康数据失败（用传感器步数兜底）: ${e.message}")
-        }
-        return Triple(heartRate, steps, sleepHours)
+            addresses?.firstOrNull()?.let { it.locality ?: it.adminArea }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
     }
 
-    // ------------------------------------------------------------------
-    // 单项采集
-    // ------------------------------------------------------------------
-    private fun currentForegroundPackage(): String {
-        if (!hasUsageAccess()) return ""
-        return try {
+    /** 失败冷却也会更新；失败保留旧天气及预报，而不是每轮重试或写成零值。 */
+    private suspend fun fetchWeather() {
+        val loc = position
+        val coords = if (loc.lat != null && loc.lng != null) loc.lat to loc.lng else ipGeolocation()
+        currentCoroutineContext().ensureActive()
+        if (coords == null) return
+        if (loc.lat == null || loc.lng == null) position = loc.copy(lat = coords.first, lng = coords.second)
+        val request = Request.Builder().url("https://api.open-meteo.com/v1/forecast?latitude=${coords.first}&longitude=${coords.second}&current=temperature_2m,relative_humidity_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=7&timezone=auto").build()
+        val json = calls.fetch(request) { response ->
+            if (!response.isSuccessful) throw IOException("天气 HTTP ${response.code}")
+            gson.fromJson(response.body?.string(), JsonObject::class.java)
+        } ?: return
+        val cur = json.getAsJsonObject("current") ?: return
+        val result = Triple(weatherCodeToCondition(cur.get("weather_code").asInt), cur.get("temperature_2m").asInt,
+            cur.get("relative_humidity_2m").asInt)
+        if (result.first == "unknown") return
+        currentCoroutineContext().ensureActive()
+        weather.record(result, SystemClock.elapsedRealtime())
+        try {
+            val daily = json.getAsJsonObject("daily")
+            val times = daily.getAsJsonArray("time")
+            val list = (0 until times.size()).map { i ->
+                mapOf("date" to times[i].asString, "code" to daily.getAsJsonArray("weather_code")[i].asInt,
+                    "max" to daily.getAsJsonArray("temperature_2m_max")[i].asDouble,
+                    "min" to daily.getAsJsonArray("temperature_2m_min")[i].asDouble)
+            }
+            handler.post { if (!gate.isStopped && instance === this) dailyForecast = list }
+        } catch (_: Exception) { /* 单独预报解析失败不清空缓存。 */ }
+    }
+
+    private fun ipGeolocation(): Pair<Double, Double>? = try {
+        calls.fetch(Request.Builder().url("https://ipapi.co/json/").build()) { response ->
+            if (!response.isSuccessful) null else {
+                val json = gson.fromJson(response.body?.string(), JsonObject::class.java)
+                val lat = json.get("latitude").asDouble
+                val lng = json.get("longitude").asDouble
+                if (lat in -90.0..90.0 && lng in -180.0..180.0) lat to lng else null
+            }
+        }
+    } catch (_: Exception) { null }
+
+    /** 按权限独立读取；步数使用聚合 API 去重，心率和睡眠读取全部分页。 */
+    private suspend fun fetchHealth() {
+        val day = LocalDate.now().toString()
+        if (HealthConnectClient.getSdkStatus(this) != HealthConnectClient.SDK_AVAILABLE) {
+            health = Health(day = day)
+            return
+        }
+        val hc = healthConnectClient ?: HealthConnectClient.getOrCreate(this).also { healthConnectClient = it }
+        val granted = withTimeoutOrNull(HEALTH_TIMEOUT_MS) { hc.permissionController.getGrantedPermissions() } ?: return
+        val previous = health
+        val now = Instant.now()
+        val startOfDay = now.atZone(ZoneId.systemDefault()).toLocalDate().atStartOfDay(ZoneId.systemDefault()).toInstant()
+        var heartRate = 0
+        var steps: Long? = null
+        var sleepHours = 0.0
+        if (HealthPermission.getReadPermission(HeartRateRecord::class) in granted) {
+            heartRate = try {
+                withTimeoutOrNull(HEALTH_TIMEOUT_MS) {
+                    val records = fetchRecordPages { token ->
+                        hc.readRecords(ReadRecordsRequest(HeartRateRecord::class,
+                            TimeRangeFilter.between(now.minus(6, ChronoUnit.HOURS), now), pageToken = token))
+                            .let { it.records to it.pageToken }
+                    }
+                    records.asSequence().flatMap { it.samples.asSequence() }
+                        .filter { it.time <= now && it.time >= now.minus(6, ChronoUnit.HOURS) }
+                        .maxByOrNull { it.time }?.beatsPerMinute?.toInt() ?: 0
+                } ?: previous.heart
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { previous.heart }
+        }
+        if (HealthPermission.getReadPermission(StepsRecord::class) in granted) {
+            steps = try {
+                withTimeoutOrNull(HEALTH_TIMEOUT_MS) {
+                    hc.aggregate(AggregateRequest(setOf(StepsRecord.COUNT_TOTAL), TimeRangeFilter.between(startOfDay, now)))[StepsRecord.COUNT_TOTAL]
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { previous.steps.takeIf { previous.day == day } }
+        }
+        if (HealthPermission.getReadPermission(SleepSessionRecord::class) in granted) {
+            sleepHours = try {
+                withTimeoutOrNull(HEALTH_TIMEOUT_MS) {
+                    val records = fetchRecordPages { token ->
+                        hc.readRecords(ReadRecordsRequest(SleepSessionRecord::class,
+                            TimeRangeFilter.between(now.minus(24, ChronoUnit.HOURS), now), pageToken = token))
+                            .let { it.records to it.pageToken }
+                    }
+                    val ranges = records.map { it.startTime.toEpochMilli() to it.endTime.toEpochMilli() }
+                    totalSleepMillis(ranges, now.minus(24, ChronoUnit.HOURS).toEpochMilli(), now.toEpochMilli()) / 3600000.0
+                } ?: previous.sleep
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { previous.sleep }
+        }
+        currentCoroutineContext().ensureActive()
+        health = Health(heartRate, steps, sleepHours, day)
+    }
+
+    /** 一轮只查询一次前台应用，短缓存同时供位置精度和所有 usage 字段使用。 */
+    private fun collectForeground() {
+        val elapsed = SystemClock.elapsedRealtime()
+        if (elapsed < nextForegroundCheck) return
+        nextForegroundCheck = elapsed + FOREGROUND_INTERVAL_MS
+        foregroundPackage = if (!hasUsageAccess()) "" else try {
             val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
             val now = System.currentTimeMillis()
-            val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 60_000L, now)
-            stats.maxByOrNull { it.lastTimeUsed }?.packageName ?: ""
-        } catch (e: Exception) {
-            ""
-        }
-    }
-
-    private fun currentForegroundApp(): String {
-        val packageName = currentForegroundPackage()
-        if (packageName.isEmpty()) return "未知"
-        return try {
-            val pm = packageManager
-            pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
-        } catch (e: Exception) {
-            packageName
-        }
-    }
-
-    private fun isNavigationPackage(packageName: String): Boolean {
-        if (packageName.isEmpty()) return false
-        return packageName in navPackages
-    }
-
-    private fun isMusicPackage(packageName: String): Boolean {
-        if (packageName.isEmpty()) return false
-        return packageName in musicPackages
+            usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, now - 60000L, now)
+                .maxByOrNull { it.lastTimeUsed }?.packageName ?: ""
+        } catch (_: Exception) { "" }
+        foregroundApp = if (foregroundPackage.isEmpty()) "未知" else try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(foregroundPackage, 0)).toString()
+        } catch (_: Exception) { foregroundPackage }
     }
 
     private fun isCalling(): Boolean {
-        // 蜂窝通话
         val cellular = try {
-            val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-            tm.callState == TelephonyManager.CALL_STATE_OFFHOOK ||
-                tm.callState == TelephonyManager.CALL_STATE_RINGING
-        } catch (e: SecurityException) {
-            false
-        }
-        // VoIP 通话（QQ/微信语音等）：音频处于通信模式
+            @Suppress("DEPRECATION")
+            val state = (getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager).callState
+            state == TelephonyManager.CALL_STATE_OFFHOOK || state == TelephonyManager.CALL_STATE_RINGING
+        } catch (_: Exception) { false }
         val voip = try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
-            am.mode == android.media.AudioManager.MODE_IN_COMMUNICATION
-        } catch (e: Exception) {
-            false
-        }
+            (getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager).mode == android.media.AudioManager.MODE_IN_COMMUNICATION
+        } catch (_: Exception) { false }
         return cellular || voip
     }
 
-    private fun reverseGeocodeCity(lat: Double, lng: Double): String {
-        return try {
-            val geocoder = Geocoder(this, Locale.CHINA)
-            val addresses = geocoder.getFromLocation(lat, lng, 1)
-            addresses?.firstOrNull()?.locality
-                ?: addresses?.firstOrNull()?.adminArea
-                ?: "未知"
-        } catch (e: Exception) {
-            "未知"
-        }
-    }
-
-    private fun hasUsageAccess(): Boolean {
-        return try {
-            val appOps = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                appOps.unsafeCheckOpNoThrow(
-                    android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    android.os.Process.myUid(),
-                    packageName
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                appOps.checkOpNoThrow(
-                    android.app.AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    android.os.Process.myUid(),
-                    packageName
-                )
-            }
-            mode == android.app.AppOpsManager.MODE_ALLOWED
-        } catch (e: Exception) {
-            false
-        }
-    }
-
-    private fun hasPermission(permission: String): Boolean {
-        return try {
-            checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
-        } catch (e: Exception) {
-            false
-        }
-    }
+    private fun hasUsageAccess(): Boolean = try {
+        val appOps = getSystemService(Context.APP_OPS_SERVICE) as android.app.AppOpsManager
+        @Suppress("DEPRECATION")
+        val mode = appOps.checkOpNoThrow(android.app.AppOpsManager.OPSTR_GET_USAGE_STATS, android.os.Process.myUid(), packageName)
+        mode == android.app.AppOpsManager.MODE_ALLOWED
+    } catch (_: Exception) { false }
 
     private fun buildDiagnostics(): Map<String, Any> {
-        val location = hasPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
-        val phoneState = hasPermission(android.Manifest.permission.READ_PHONE_STATE)
+        val location = hasLocationPermission(this)
+        val phoneState = hasPermission(this, Manifest.permission.READ_PHONE_STATE)
         val usageAccess = hasUsageAccess()
-        val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            hasPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            true
-        }
-
+        val notification = Build.VERSION.SDK_INT < 33 || hasPermission(this, Manifest.permission.POST_NOTIFICATIONS)
         val warnings = mutableListOf<String>()
-        if (!location) warnings.add("未授予定位权限，无法采集 GPS")
-        if (!phoneState) warnings.add("未授予通话状态权限，无法判断是否在打电话")
-        if (!usageAccess) warnings.add("未开启「使用情况访问」权限，无法读取前台应用")
-
-        return mapOf(
-            // 版本号唯一数据源是 build.gradle 的 versionName，不硬编码
-            "app_version" to BuildConfig.VERSION_NAME,
-            "running_seconds" to ((System.currentTimeMillis() - startTimeMillis) / 1000),
-            "send_success" to sendSuccess,
-            "send_failed" to sendFailed,
-            "last_error" to lastError,
-            "permissions" to mapOf(
-                "location" to location,
-                "phone_state" to phoneState,
-                "usage_access" to usageAccess,
-                "notification" to notification
-            ),
-            "warnings" to warnings
-        )
+        if (!location) warnings.add("未授予定位权限，使用缓存或 IP 定位")
+        if (!hasMotionPermission(this)) warnings.add("未授予运动识别权限，传感器步数不可用")
+        if (!phoneState) warnings.add("未授予通话状态权限")
+        if (!usageAccess) warnings.add("未开启使用情况访问权限")
+        return mapOf("app_version" to BuildConfig.VERSION_NAME, "running_seconds" to ((SystemClock.elapsedRealtime() - startElapsed) / 1000),
+            "send_success" to sendSuccess, "send_failed" to sendFailed, "last_error" to lastError,
+            "permissions" to mapOf("location" to location, "phone_state" to phoneState, "usage_access" to usageAccess, "notification" to notification),
+            "warnings" to warnings)
     }
 
-    // ------------------------------------------------------------------
-    // 步数传感器回调（Health Connect 不可用时兜底）
-    // ------------------------------------------------------------------
+    private fun stepsToday(): Long = stepState.let { if (it.day == LocalDate.now().toString() && hasMotionPermission(this)) it.total else 0L }
+
     override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
-        val current = event.values[0].toLong()
-        if (stepBaseline < 0) {
-            stepBaseline = prefs.getLong("baseline", -1L)
-            if (stepBaseline < 0 || current < stepBaseline) {
-                stepBaseline = current
-                prefs.edit().putLong("baseline", stepBaseline).apply()
-            }
-        }
-        if (current < stepBaseline) {
-            stepBaseline = current
-            prefs.edit().putLong("baseline", stepBaseline).apply()
-        }
-        lastSteps = current - stepBaseline
+        if (gate.isStopped || event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
+        val current = event.values.firstOrNull()?.toLong() ?: return
+        if (current < 0) return
+        val next = recordSteps(stepState, LocalDate.now().toString(), bootCount, current)
+        stepState = next
+        stepPrefs.edit().putString("day", next.day).putInt("boot", next.bootCount)
+            .putLong("counter", next.counter).putLong("total", next.total).apply()
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
-        // 无需处理
-    }
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     companion object {
         const val EXTRA_IP = "extra_ip"
         const val EXTRA_PORT = "extra_port"
         const val EXTRA_INTERVAL = "extra_interval"
         const val EXTRA_TOKEN = "extra_token"
-
-        /** 连接默认值：各页面占位/兜底的唯一数据源，禁止另处重复字面量。 */
-        const val DEFAULT_IP = "192.168.1.4"
-        const val DEFAULT_PORT = 821
-        const val DEFAULT_INTERVAL = 300
-
+        const val DEFAULT_IP = SensorConfig.DEFAULT_IP
+        const val DEFAULT_PORT = SensorConfig.DEFAULT_PORT
+        const val DEFAULT_INTERVAL = SensorConfig.DEFAULT_INTERVAL
         private const val NOTIFICATION_ID = 1
         private const val TAG = "MizukiSensor"
-
-        /** 指数退避最大倍数：连续失败时隔隔翻倍，上限此值（默认间隔 300ms × 8 = 最长 2.4s）。 */
         private const val MAX_BACKOFF_MULTIPLIER = 8
+        private const val LOCATION_INTERVAL_MS = 15000L
+        private const val LOCATION_TIMEOUT_MS = 5000L
+        private const val LOCATION_MAX_AGE_MS = 30 * 60 * 1000L
+        private const val CITY_INTERVAL_MS = 5 * 60 * 1000L
+        private const val HEALTH_INTERVAL_MS = 60000L
+        private const val HEALTH_TIMEOUT_MS = 8000L
+        private const val WEATHER_CACHE_MS = 15 * 60 * 1000L
+        private const val WEATHER_RETRY_MS = 60000L
+        private const val FOREGROUND_INTERVAL_MS = 1000L
+        private const val REPLAY_INTERVAL_MS = 1000L
+        private const val REPLAY_FAILURE_MS = 10000L
+        private const val METADATA_TICK_MS = 1000L
+        @Volatile var latestData: Map<String, Any>? = null
+            private set
+        @Volatile var dailyForecast: List<Map<String, Any>>? = null
+            private set
+        @Volatile var isRunning = false
+            private set
+        @Volatile var isConnected = false
+            private set
+        @Volatile var startupError = ""
+            private set
+        @Volatile private var instance: SensorService? = null
 
-        /** 最近一次采集到的完整数据（供状态页展示）。 */
-        @Volatile
-        var latestData: Map<String, Any>? = null
-
-        /** 7 天天气预报（供天气页展示）。 */
-        @Volatile
-        var dailyForecast: List<Map<String, Any>>? = null
-
-        @Volatile
-        private var instance: SensorService? = null
-
-        /** 供状态页下拉刷新时，立即触发一次采集。 */
         fun requestRefresh() {
+            instance?.let { svc -> svc.handler.post { if (!svc.gate.isStopped) svc.collectAndSend() } }
+        }
+
+        fun requestHealthRefresh() {
             instance?.let { svc ->
-                svc.handler.post { svc.collectAndSend() }
+                if (!svc.gate.isStopped) svc.nextHealthCheck = 0L
             }
         }
 
-        /** WMO 天气代码区间 → 受控词表字符串。 */
-        private val WEATHER_MAP: Map<IntRange, String> = mapOf(
-            0..0 to "clear",
-            1..3 to "cloudy",
-            45..48 to "fog",
-            51..57 to "drizzle",
-            61..67 to "rain",
-            71..77 to "snow",
-            80..82 to "shower",
-            85..86 to "snow",
-            95..99 to "thunderstorm",
-        )
+        /** UI 先同步关闭旧运行期，阻止断开和重新连接之间的旧请求回流。 */
+        fun stop(context: Context) {
+            instance?.stopCollection()
+            context.stopService(Intent(context, SensorService::class.java))
+        }
 
-        /** WMO 天气代码 → 受控词表字符串。 */
-        fun weatherCodeToCondition(code: Int): String =
-            WEATHER_MAP.entries.firstOrNull { code in it.key }?.value ?: "unknown"
+        private fun hasPermission(context: Context, permission: String) =
+            context.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+
+        private fun hasLocationPermission(context: Context) = hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+            hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+        private fun hasMotionPermission(context: Context) = Build.VERSION.SDK_INT < 29 || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)
+
+        fun foregroundTypes(context: Context): Int {
+            var types = 0
+            val lm = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val enabled = try {
+                if (Build.VERSION.SDK_INT >= 28) lm.isLocationEnabled else lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+            } catch (_: Exception) { false }
+            val (location, health) = resolveForegroundAccess(Build.VERSION.SDK_INT, hasLocationPermission(context), enabled, hasMotionPermission(context))
+            if (location) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            if (health) types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+            return types
+        }
+
+        fun canStart(context: Context) = Build.VERSION.SDK_INT < 34 || foregroundTypes(context) != 0
+
+        private fun isPermanentReject(code: Int) = code in 400..499 && code != 429
+
+        private val WEATHER_MAP = mapOf(0..0 to "clear", 1..3 to "cloudy", 45..48 to "fog", 51..57 to "drizzle",
+            61..67 to "rain", 71..77 to "snow", 80..82 to "shower", 85..86 to "snow", 95..99 to "thunderstorm")
+        fun weatherCodeToCondition(code: Int): String = WEATHER_MAP.entries.firstOrNull { code in it.key }?.value ?: "unknown"
     }
 }

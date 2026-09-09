@@ -62,14 +62,35 @@ class ComputerCollector:
     """电脑状态采集器（后台线程）。"""
 
     def __init__(self, interval: float = 5.0) -> None:
-        self.interval = max(1, int(interval))
+        self.interval = interval
         self._data: dict[str, Any] = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._local_ip_cache: str = ""
         self._local_ip_time: float = 0
-        self.collect_foreground = True  # 前台采集开关（与 config.computer_collect_enabled 同步）
+        self.is_collecting_foreground = True  # 前台采集开关（与 config.computer_collect_enabled 同步）
+
+    @property
+    def interval(self) -> float:
+        return self._interval
+
+    @interval.setter
+    def interval(self, value: float) -> None:
+        self._interval = min(600.0, max(0.1, float(value)))
+
+    @property
+    def is_collecting_foreground(self) -> bool:
+        with self._lock:
+            return self._is_collecting_foreground
+
+    @is_collecting_foreground.setter
+    def is_collecting_foreground(self, enabled: bool) -> None:
+        with self._lock:
+            self._is_collecting_foreground = enabled
+
+    def is_alive(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     # ------------------------------------------------------------------
     # 采集逻辑
@@ -104,13 +125,9 @@ class ComputerCollector:
             "local_ip": self._local_ip(),
         }
         data.update(self._snapshot_hardware())
-        if self.collect_foreground:
-            data.update(self._snapshot_foreground())
+        if self.is_collecting_foreground:
+            data.update(self.snapshot_foreground())
         return data
-
-    def _snapshot_foreground(self) -> dict[str, Any]:
-        """采集前台窗口/进程/游戏/导航状态（受 collect_foreground 控制）。"""
-        return self.snapshot_foreground()
 
     def snapshot_foreground(self) -> dict[str, Any]:
         """采集前台窗口/进程/游戏/导航状态（受 computer_collect_enabled 控制）。"""
@@ -187,9 +204,8 @@ class ComputerCollector:
     def get(self) -> dict[str, Any]:
         """返回最近一次采集到的电脑状态。"""
         with self._lock:
-            return dict(self._data)
-
-    def get_or_empty(self) -> dict[str, Any]:
-        """返回最近一次采集到的电脑状态，缓存为空返回空 dict。"""
-        with self._lock:
-            return dict(self._data) if self._data else {}
+            data = dict(self._data)
+            if not self._is_collecting_foreground:
+                for key in ("foreground_window", "foreground_process", "is_gaming"):
+                    data.pop(key, None)
+            return data

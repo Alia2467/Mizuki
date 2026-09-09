@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import os
 import sys
 import threading
@@ -20,6 +21,9 @@ import webview
 from PIL import Image
 
 from server import VERSION, app_dir, config, create_server, resource_dir, start_services, stop_services
+
+# Windows API: 互斥体已存在时的错误码（GetLastError）
+ERROR_ALREADY_EXISTS = 183
 
 
 def _redirect_logs() -> None:
@@ -54,7 +58,7 @@ def make_icon() -> Image.Image:
 def _acquire_single_instance_lock() -> bool:
     """尝试获取全局互斥体，确保只有一个实例运行。返回 True 表示获取成功。"""
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\MizukiConsole")
-    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    if ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
         return False
     return True
 
@@ -65,9 +69,17 @@ def main() -> None:
         ctypes.windll.user32.MessageBoxW(0, "海月之音控制台已在运行中。", "海月之音", 0x40)
         sys.exit(0)
     _redirect_logs()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     start_services()
     server = create_server()
-    threading.Thread(target=server.run, daemon=True, name="uvicorn").start()
+    server_thread = threading.Thread(target=server.run, daemon=True, name="uvicorn")
+    server_thread.start()
+    is_quitting = threading.Event()
+
+    def stop_server():
+        server.should_exit = True
+        server_thread.join(timeout=7)
+        stop_services()
 
     port = config["port"]
     url = f"http://localhost:{port}/"
@@ -85,6 +97,8 @@ def main() -> None:
 
     if window is not None:
         def on_closing():
+            if is_quitting.is_set():
+                return True
             # 关闭窗口改为隐藏到托盘，服务继续后台运行
             window.hide()
             return False
@@ -99,15 +113,17 @@ def main() -> None:
                 pass
 
     def on_quit(icon, item):
+        if is_quitting.is_set():
+            return
+        is_quitting.set()
         icon.stop()
+        stop_server()
         if window is not None:
             try:
                 window.destroy()
             except Exception:
                 pass
-        server.should_exit = True
-        stop_services()
-        # 强制退出进程，避免残留
+        # 请求结束且落盘队列已排空后再退出，避免尾部数据丢失。
         os._exit(0)
 
     menu = pystray.Menu(
@@ -128,8 +144,7 @@ def main() -> None:
     else:
         threading.Event().wait()
 
-    server.should_exit = True
-    stop_services()
+    stop_server()
     try:
         icon.stop()
     except Exception:

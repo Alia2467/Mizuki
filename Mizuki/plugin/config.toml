@@ -1,6 +1,6 @@
 [plugin]
 enabled = true
-config_version = "1.1.0"
+config_version = "1.1.3"
 
 [source]
 data_url = "http://localhost:821/merged-data"
@@ -18,8 +18,11 @@ cooldown_ms = 180000
 
 [rules]
 
-# 声明式规则表：按顺序求值，首个命中即触发；模板支持 {value}（实际值）
-# op 取值：>= / > / <= < / == / in（in 时 value 为列表）
+# 声明式规则表：key 必须唯一；按顺序合并所有命中规则，仅主动触发一次。
+# 手机离线时忽略 phone 缓存，电脑规则仍可运行；导航/通话只静音，不额外发消息。
+# 成功冷却仅在 SDK 明确确认受理后记录；失败按规则独立退避 5–60 秒。
+# 已确认的上下文不会因触发失败而重复追加；未知 SDK 返回不按成功处理。
+# op 取值：>= / > / <= / < / == / in（in 时 value 为非空列表）；模板支持 {value}。
 [[rules.table]]
 key = "heart_high"
 enabled = true

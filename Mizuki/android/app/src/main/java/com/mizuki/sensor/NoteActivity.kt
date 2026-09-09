@@ -71,22 +71,10 @@ class NoteActivity : AppCompatActivity() {
     }
 
     private fun refreshNotes() {
-        val list = mutableListOf<String>()
-        val readable = db.readableDatabase
-        val cursor = if (currentCategory == "全部") {
-            readable.rawQuery("SELECT _id, title, content FROM notes ORDER BY created_at DESC", null)
-        } else {
-            readable.rawQuery(
-                "SELECT _id, title, content FROM notes WHERE category=? ORDER BY created_at DESC",
-                arrayOf(currentCategory)
-            )
+        val notes = currentNotes()
+        val list = notes.map { (title, content, _) ->
+            if (title.isNotEmpty()) title else content.ifEmpty { "（空笔记）" }
         }
-        while (cursor.moveToNext()) {
-            val title = cursor.getString(1)
-            val content = cursor.getString(2)
-            list.add(if (title.isNotEmpty()) title else content.ifEmpty { "（空笔记）" })
-        }
-        cursor.close()
         noteList.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, list)
         noteList.setOnItemClickListener { _, _, position, _ ->
             showNoteDetail(position)

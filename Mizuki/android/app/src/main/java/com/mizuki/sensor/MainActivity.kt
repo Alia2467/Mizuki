@@ -64,14 +64,15 @@ class MainActivity : AppCompatActivity() {
     private val healthPermissionLauncher = registerForActivityResult(
         PermissionController.createRequestPermissionResultContract()
     ) {
-        prefs.edit().putBoolean("health_perm_asked", true).apply()
-        startCollectFromEdits()
+        // 健康授权与连接开关职责分开，授权结束不偷偷启动或重配采集服务。
+        SensorService.requestHealthRefresh()
     }
 
     private val statusRunnable = object : Runnable {
         override fun run() {
             updateStatusPage()
-            statusHandler.postDelayed(this, 3000)
+            applyStatusLight()
+            statusHandler.postDelayed(this, 1000L)
         }
     }
 
@@ -115,7 +116,7 @@ class MainActivity : AppCompatActivity() {
 
         // 状态灯：点击切换连接
         statusLight.setOnClickListener {
-            val connected = prefs.getBoolean("service_running", false)
+            val connected = SensorService.isRunning
             if (connected) {
                 onDisconnect()
             } else {
@@ -175,13 +176,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        statusHandler.removeCallbacks(statusRunnable)
+        statusHandler.removeCallbacksAndMessages(null)
+    }
+
+    override fun onPause() {
+        statusHandler.removeCallbacksAndMessages(null)
+        swipeRefresh.isRefreshing = false
+        (pageHome as SwipeRefreshLayout).isRefreshing = false
+        super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
-        FontManager.applyTo(this)
+        FontApplier.applyTo(this)
         applyThemeToButtons()
+        statusHandler.removeCallbacks(statusRunnable)
+        statusHandler.post(statusRunnable)
         applyStatusLight()
     }
 
@@ -219,31 +229,36 @@ class MainActivity : AppCompatActivity() {
             switchPage(2)
             return
         }
-        savePrefs()
-
         val missing = missingPermissions()
         if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQ_PERMISSIONS)
             return
         }
-        requestHealthPermissions()
-    }
-
-    private fun onDisconnect() {
-        stopService(Intent(this, SensorService::class.java))
-        setStatus(false)
-    }
-
-    private fun requestHealthPermissions() {
         startCollectFromEdits()
     }
 
+    private fun onDisconnect() {
+        SensorService.stop(this)
+        applyStatusLight()
+    }
+
     private fun startCollectFromEdits() {
-        val ip = ipEdit.text.toString().trim()
-        val port = portEdit.text.toString().trim().toIntOrNull() ?: SensorService.DEFAULT_PORT
-        val interval = intervalEdit.text.toString().trim().toIntOrNull() ?: SensorService.DEFAULT_INTERVAL
-        val token = tokenEdit.text.toString().trim()
-        if (ip.isNotEmpty()) startCollect(ip, port, interval, token)
+        val config = try {
+            SensorConfig.resolve(mapOf("ip" to ipEdit.text.toString(), "port" to portEdit.text.toString(),
+                "interval" to intervalEdit.text.toString(), "token" to tokenEdit.text.toString()), emptyMap())
+        } catch (e: IllegalArgumentException) {
+            Toast.makeText(this, e.message ?: "连接配置无效", Toast.LENGTH_LONG).show()
+            switchPage(2)
+            return
+        }
+        if (!SensorService.canStart(this)) {
+            Toast.makeText(this, "请授予定位并打开系统定位，或授予运动识别权限后再连接", Toast.LENGTH_LONG).show()
+            applyStatusLight()
+            return
+        }
+        intervalEdit.setText(config.intervalMs.toString())
+        savePrefs()
+        startCollect(config.host, config.port, config.intervalMs.toInt(), config.token)
     }
 
     private fun startCollect(ip: String, port: Int, interval: Int, token: String) {
@@ -253,27 +268,23 @@ class MainActivity : AppCompatActivity() {
             putExtra(SensorService.EXTRA_INTERVAL, interval)
             putExtra(SensorService.EXTRA_TOKEN, token)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        try {
             startForegroundService(intent)
-        } else {
-            startService(intent)
+            statusText.text = "正在启动采集…"
+        } catch (e: Exception) {
+            Toast.makeText(this, "启动失败：${e.message}", Toast.LENGTH_LONG).show()
+            applyStatusLight()
         }
-        setStatus(true)
-    }
-
-    private fun setStatus(connected: Boolean) {
-        prefs.edit().putBoolean("service_running", connected).apply()
-        applyStatusLight()
     }
 
     private fun applyStatusLight() {
-        val connected = prefs.getBoolean("service_running", false)
-        if (connected) {
-            statusDot.setBackgroundResource(R.drawable.status_dot_on)
-            statusText.text = getString(R.string.status_connected)
-        } else {
-            statusDot.setBackgroundResource(R.drawable.status_dot_off)
-            statusText.text = getString(R.string.status_not_connected)
+        val connected = SensorService.isRunning && SensorService.isConnected
+        statusDot.setBackgroundResource(if (connected) R.drawable.status_dot_on else R.drawable.status_dot_off)
+        statusText.text = when {
+            connected -> getString(R.string.status_connected)
+            SensorService.isRunning -> "采集中，等待连接"
+            SensorService.startupError.isNotEmpty() -> "启动失败：${SensorService.startupError}"
+            else -> getString(R.string.status_not_connected)
         }
     }
 
@@ -322,7 +333,14 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) {
+            // Android 12+ 必须同时请求精确和粗略位置，允许用户只授予粗略位置。
             result.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            result.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            result.add(Manifest.permission.ACTIVITY_RECOGNITION)
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE)
             != PackageManager.PERMISSION_GRANTED
@@ -341,12 +359,12 @@ class MainActivity : AppCompatActivity() {
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_PERMISSIONS) {
-            requestHealthPermissions()
+            startCollectFromEdits()
         }
     }
 
     private fun updateStatusPage() {
-        val data = SensorService.latestData ?: return
+        val data = SensorService.latestData ?: emptyMap()
         val location = data["location"] as? Map<*, *>
         val weather = data["weather"] as? Map<*, *>
         val health = data["health"] as? Map<*, *>
@@ -362,8 +380,8 @@ class MainActivity : AppCompatActivity() {
         val humidity = weather?.get("humidity") ?: 0
         statusWeather.text = if (condition != "unknown") "$condition · ${temp}℃ · 湿度${humidity}%" else "暂无"
 
-        val steps = health?.get("steps") ?: 0
-        statusSteps.text = if (steps != 0) "$steps 步" else "—"
+        val steps = (health?.get("steps") as? Number)?.toLong() ?: 0L
+        statusSteps.text = if (steps != 0L) "$steps 步" else "—"
 
         val heart = health?.get("heart_rate") ?: 0
         statusHeart.text = if (heart != 0) "$heart bpm" else getString(R.string.need_watch_data)

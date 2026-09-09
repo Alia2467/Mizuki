@@ -49,7 +49,7 @@ class DeviceActivity : AppCompatActivity() {
     private fun refreshPhone() {
         val data = SensorService.latestData
         findViewById<TextView>(R.id.devicePhone).text = (data?.get("device_id") ?: "未知").toString()
-        findViewById<TextView>(R.id.devicePhoneStatus).text = if (data != null) "运行中" else "未运行"
+        findViewById<TextView>(R.id.devicePhoneStatus).text = if (SensorService.isRunning) "运行中" else "未运行"
         val usage = data?.get("usage") as? Map<*, *>
         findViewById<TextView>(R.id.devicePhoneApp).text = (usage?.get("foreground_app") ?: "未知").toString()
     }

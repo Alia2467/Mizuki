@@ -3,6 +3,8 @@
 import json
 import time
 
+import pytest
+
 
 # ── /health ────────────────────────────────────────────────────────────
 
@@ -49,8 +51,9 @@ class TestConfig:
     def test_patch_config_updates_token(self, client):
         resp = client.patch("/api/config", json={"shared_token": "abc123"})
         assert resp.status_code == 200
-        body = client.get("/api/config").json()
-        assert body["shared_token"] == "abc123"
+        body = client.get("/api/config", headers={"X-Sensor-Token": "abc123"}).json()
+        assert "shared_token" not in body
+        assert body["token_configured"] is True
         assert body["auth_enabled"] is True
 
     def test_patch_config_updates_poll_interval(self, client):
@@ -136,8 +139,7 @@ class TestPhoneData:
     def test_phone_data_recorded_to_storage(self, client, tmp_path):
         import server
         client.post("/phone-data", json=PHONE_PAYLOAD)
-        # 等写入完成
-        time.sleep(0.5)
+        assert server.storage.flush()
         # 验证数据已写入 SQLite
         records = server.storage.query(record_type="phone", limit=1)
         assert len(records) >= 1
@@ -211,7 +213,8 @@ class TestLogs:
 
     def test_logs_after_phone_data(self, client):
         client.post("/phone-data", json=PHONE_PAYLOAD)
-        time.sleep(0.5)
+        import server
+        assert server.storage.flush()
         logs = client.get("/api/logs").json()
         assert len(logs) >= 1
         assert logs[0]["type"] == "phone"
@@ -276,6 +279,27 @@ class TestComputerCollectToggle:
         client.patch("/api/config", json={"computer_collect_enabled": True})
         body = client.get("/api/config").json()
         assert body["computer_collect_enabled"] is True
+
+
+# ── 全端点鉴权 ────────────────────────────────────────────────────────
+
+class TestManagementAuth:
+    def test_private_endpoints_require_token(self, client):
+        client.patch("/api/config", json={"shared_token": "review-token"})
+        for path in ("/api/state", "/api/config", "/api/logs", "/api/stats", "/api/plugin-status", "/health/deep", "/api/export/json"):
+            assert client.get(path).status_code == 401, path
+        assert client.patch("/api/config", json={"shared_token": ""}).status_code == 401
+        assert client.post("/api/plugin-heartbeat", json={"plugin_id": "review"}).status_code == 401
+        assert client.get("/health").status_code == 200
+        assert client.get("/").status_code == 200
+
+    def test_config_never_discloses_configured_token(self, client):
+        client.patch("/api/config", json={"shared_token": "review-token"})
+        response = client.get("/api/config", headers={"X-Sensor-Token": "review-token"})
+        assert response.status_code == 200
+        assert "shared_token" not in response.json()
+        assert response.json()["token_configured"] is True
+        assert "review-token" not in response.text
 
 
 # ── 连接状态 ──────────────────────────────────────────────────────────

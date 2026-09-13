@@ -1,0 +1,44 @@
+name: Mirror to CNB
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to CNB mirror
+        continue-on-error: true
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+        run: |
+          if [ -z "$CNB_TOKEN" ]; then
+            echo "No CNB_TOKEN configured, skipping mirror"
+            exit 0
+          fi
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          REMOTE="https://cnb:${CNB_TOKEN}@cnb.cool/FengBuYu/Mizuki/Mizuki.git"
+          
+          # Push main branch
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            git push -f "$REMOTE" main:main 2>&1 | sed "s/${CNB_TOKEN}/****/g" || true
+          fi
+          
+          # Push tags
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
+            git push "$REMOTE" "$TAG" 2>&1 | sed "s/${CNB_TOKEN}/****/g" || true
+          fi

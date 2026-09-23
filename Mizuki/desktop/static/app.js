@@ -10,6 +10,7 @@
   const REQUEST_TIMEOUT_MS = 10000;
   const TOKEN_KEY = "mizuki-token";
   const HW_CIRC = 264; // 2 * π * 42 ≈ 264
+
   const requests = new Set();
   let sessionToken = "";
   let requestEpoch = 0;
@@ -27,16 +28,43 @@
 
   try { sessionToken = sessionStorage.getItem(TOKEN_KEY) || ""; } catch (_) { /* 内存会话兜底 */ }
 
+  // DOM 引用集中缓存，初始化时一次性查询，避免轮询中重复查找。
+  const dom = {};
+  const cacheDom = (ids) => {
+    for (const id of ids) {
+      dom[id] = document.getElementById(id);
+    }
+  };
+  cacheDom([
+    "auth-card", "auth-form", "auth-msg", "auth-status",
+    "card-export", "cfg-clear-token", "cfg-edit-computer-enabled",
+    "cfg-edit-interval", "cfg-edit-poll", "cfg-edit-timeout",
+    "cfg-edit-token", "cfg-port", "cfg-token-note", "config-status",
+    "dashboard", "export-csv", "export-json", "export-msg",
+    "export-toggle-btn", "history-bars", "history-empty", "history-labels",
+    "history-status", "hw-cpu-pct", "hw-cpu-sub", "hw-mem-pct",
+    "hw-mem-sub", "hw-disk-pct", "hw-disk-sub", "login-submit",
+    "login-token", "logs-body", "logs-count", "logs-status",
+    "logout-btn", "plugin-pill", "plugin-text", "settings-btn",
+    "settings-card", "settings-close", "settings-msg", "settings-save",
+    "status-pill", "status-text", "state-notice", "theme-btn",
+    "conn-device", "conn-last-seen", "loc-city", "loc-lat", "loc-lng",
+    "wth-condition", "wth-temp", "wth-humidity", "hlt-heart", "hlt-steps",
+    "hlt-sleep", "use-app", "use-nav", "use-call", "diag-version",
+    "diag-uptime", "diag-send", "diag-error", "diag-perms", "diag-warnings",
+    "pc-ip", "pc-window", "pc-process", "pc-flags",
+    "srv-version", "srv-uptime", "srv-refresh",
+  ]);
+
   const dashboardLoop = { run: pollDashboard, delay: () => pollMs, timer: null, isRunning: false };
   const pluginLoop = { run: pollPluginStatus, delay: () => PLUGIN_POLL_MS, timer: null, isRunning: false };
   const configLoop = { run: pollConfig, delay: () => CONFIG_POLL_MS, timer: null, isRunning: false };
   const loops = [dashboardLoop, pluginLoop, configLoop];
 
-  function isObject(value) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  }
+  // 工具函数
 
-  // 快捷取值：从嵌套对象安全读取，保留合法的 0 和 false。
+  const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
   function pick(obj, path, fallback) {
     let cur = obj;
     for (const part of path.split(".")) {
@@ -69,10 +97,23 @@
   }
 
   function setText(id, text, cls) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = text;
-    el.className = "kv-val" + (cls ? " " + cls : "");
+    const node = dom[id];
+    if (!node) return;
+    const next = "kv-val" + (cls ? " " + cls : "");
+    if (node.textContent !== text || node.className !== next) {
+      node.textContent = text;
+      node.className = next;
+    }
+  }
+
+  function setClass(id, cls) {
+    const node = dom[id];
+    if (node && node.className !== cls) node.className = cls;
+  }
+
+  function setTextIfChanged(id, text) {
+    const node = dom[id];
+    if (node && node.textContent !== text) node.textContent = text;
   }
 
   function textElement(tag, cls, text) {
@@ -98,10 +139,10 @@
     return String(value).padStart(2, "0");
   }
 
-  function date(value) {
-    if (value === undefined || value === null || value === "") return null;
-    const result = new Date(value);
-    return Number.isNaN(result.getTime()) ? null : result;
+  function date(iso) {
+    if (iso === undefined || iso === null || iso === "") return null;
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? null : d;
   }
 
   function fmtClock(iso) {
@@ -119,12 +160,15 @@
     return d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : "—";
   }
 
+  // 渲染函数
+
   function renderHardwareGauge(suffix, pct, sub) {
-    const pctEl = document.getElementById("hw-" + suffix + "-pct");
+    const pctEl = dom["hw-" + suffix + "-pct"];
     const ringEl = document.querySelector(".hw-ring-" + suffix);
-    const subEl = document.getElementById("hw-" + suffix + "-sub");
+    const subEl = dom["hw-" + suffix + "-sub"];
     const value = number(pct);
     const val = value === null ? null : Math.max(0, Math.min(100, Math.round(value)));
+
     if (pctEl) pctEl.textContent = val === null ? "—" : String(val);
     if (ringEl) {
       ringEl.style.strokeDashoffset = HW_CIRC - ((val ?? 0) / 100) * HW_CIRC;
@@ -135,9 +179,9 @@
 
   function render(state) {
     const online = state.phone_connected === true;
-    document.getElementById("status-pill").className = "status-pill " + (online ? "online" : "offline");
-    document.getElementById("status-text").textContent = online ? "手机在线" : "手机离线";
-    document.getElementById("state-notice").textContent = "";
+    setClass("status-pill", "status-pill " + (online ? "online" : "offline"));
+    setTextIfChanged("status-text", online ? "手机在线" : "手机离线");
+    setTextIfChanged("state-notice", "");
     setText("conn-device", pick(state.phone, "device_id", "—"));
     setText("conn-last-seen", fmtClock(state.phone_last_seen));
     setText("loc-city", pick(state.phone, "location.city", "—"));
@@ -174,8 +218,8 @@
     setText("pc-ip", pick(state.computer, "local_ip", "—"));
     setText("pc-window", pick(state.computer, "foreground_window", "—"));
     setText("pc-process", pick(state.computer, "foreground_process", "—"));
-    const isGaming = pick(state.computer, "is_gaming") === true;
-    setText("pc-flags", isGaming ? "🎮 游戏中" : "正常", isGaming ? "yes" : "");
+    setText("pc-flags", pick(state.computer, "is_gaming") === true ? "🎮 游戏中" : "正常",
+      pick(state.computer, "is_gaming") === true ? "yes" : "");
     renderHardwareGauge("cpu", pick(state.computer, "cpu_percent"));
     renderHardwareGauge("mem", pick(state.computer, "memory_percent"),
       fmtNumber(pick(state.computer, "memory_used_gb")) + " / " + fmtNumber(pick(state.computer, "memory_total_gb")) + " GB");
@@ -184,22 +228,19 @@
     setText("srv-version", pick(state.server, "version", "—"));
     setText("srv-uptime", fmtUptime(pick(state.server, "uptime_seconds")));
     setText("srv-refresh", fmtClock(new Date().toISOString()));
-    // /api/state 不含插件信息；插件在线指示只能由独立的心跳状态接口驱动。
   }
 
   function renderPluginStatus(plugins) {
-    const online = plugins.filter((plugin) => plugin.online === true).length;
-    document.getElementById("plugin-pill").className = "status-pill " + (online ? "online" : "offline");
-    document.getElementById("plugin-text").textContent = online ? `插件 ${online}/${plugins.length} 在线` : "插件 离线";
+    const online = plugins.filter((p) => p.online === true).length;
+    setClass("plugin-pill", "status-pill " + (online ? "online" : "offline"));
+    setTextIfChanged("plugin-text", online ? `插件 ${online}/${plugins.length} 在线` : "插件 离线");
   }
 
   function renderPluginUnknown(text) {
-    document.getElementById("plugin-pill").className = "status-pill unknown";
-    document.getElementById("plugin-text").textContent = text;
+    setClass("plugin-pill", "status-pill unknown");
+    setTextIfChanged("plugin-text", text);
   }
 
-  // SQLite 行为 {id,type,timestamp,data}，data 可为 JSON 字符串或已解析对象。
-  // 同时兼容旧的展平记录；损坏行单独跳过，不影响其他记录或主轮询。
   function normalizeRecords(rows) {
     if (!Array.isArray(rows)) throw new Error("Invalid records");
     const records = [];
@@ -213,51 +254,51 @@
       const type = row.type || data.type;
       if (type !== "phone" && type !== "computer") continue;
       records.push({
-        type: type,
+        type,
         timestamp: pick(data, "received_at", pick(row, "received_at", pick(row, "timestamp", data.timestamp))),
-        data: data,
+        data,
       });
     }
     return records;
   }
 
   function renderLogs(records) {
-    const body = document.getElementById("logs-body");
-    body.replaceChildren();
-    document.getElementById("logs-count").textContent = records.length + " 条";
+    dom["logs-body"].replaceChildren();
+    setTextIfChanged("logs-count", records.length + " 条");
     if (!records.length) {
-      body.appendChild(textElement("div", "logs-empty", "暂无记录"));
+      dom["logs-body"].appendChild(textElement("div", "logs-empty", "暂无记录"));
       return;
     }
     for (const record of records.slice(0, 30)) {
       const data = record.data;
       const isPhone = record.type === "phone";
-      const main = isPhone ? [pick(data, "device_id", "—"), pick(data, "location.city", "—"),
-        fmtNumber(pick(data, "health.steps")) + " 步", pick(data, "usage.foreground_app", "—")].join(" · ")
-        : pick(data, "foreground_window", "—");
+      const main = isPhone ? [
+        pick(data, "device_id", "—"),
+        pick(data, "location.city", "—"),
+        fmtNumber(pick(data, "health.steps")) + " 步",
+        pick(data, "usage.foreground_app", "—"),
+      ].join(" · ") : pick(data, "foreground_window", "—");
       const row = document.createElement("div");
       row.className = "log-item";
       row.appendChild(textElement("span", "log-time", fmtLogTime(record.timestamp)));
       row.appendChild(textElement("span", "log-kind " + (isPhone ? "phone" : "pc"), isPhone ? "手机" : "电脑"));
       row.appendChild(textElement("span", "log-main", main));
-      body.appendChild(row);
+      dom["logs-body"].appendChild(row);
     }
   }
 
   function renderHistory() {
-    const barsEl = document.getElementById("history-bars");
-    const labelsEl = document.getElementById("history-labels");
     const points = [];
     for (let i = historyData.length - 1; i >= 0; i--) {
       const record = historyData[i];
       if (record.type !== "phone") continue;
       const value = number(pick(record.data, "health." + historyMetric));
-      if (value !== null && value >= 0) points.push({ value: value, time: fmtShortTime(record.timestamp) });
+      if (value !== null && value >= 0) points.push({ value, time: fmtShortTime(record.timestamp) });
     }
-    barsEl.replaceChildren();
-    labelsEl.replaceChildren();
-    document.getElementById("history-empty").classList.toggle("show", !points.length);
-    const maxValue = Math.max(1, ...points.map((point) => point.value));
+    dom["history-bars"].replaceChildren();
+    dom["history-labels"].replaceChildren();
+    dom["history-empty"].classList.toggle("show", !points.length);
+    const maxValue = Math.max(1, ...points.map((p) => p.value));
     for (const point of points) {
       const bar = document.createElement("div");
       bar.className = "history-bar" + (point.value === 0 ? " is-zero" : "");
@@ -265,10 +306,12 @@
       bar.dataset.value = String(point.value);
       bar.title = point.time + " · " + point.value;
       bar.setAttribute("aria-label", bar.title);
-      barsEl.appendChild(bar);
-      labelsEl.appendChild(textElement("div", "history-label", point.time));
+      dom["history-bars"].appendChild(bar);
+      dom["history-labels"].appendChild(textElement("div", "history-label", point.time));
     }
   }
+
+  // 请求管理
 
   function cancelRequests(backgroundOnly) {
     if (backgroundOnly) pollEpoch++;
@@ -297,8 +340,6 @@
     return error.name === "AuthenticationError" || error.name === "StaleRequest";
   }
 
-  // 所有受保护请求共用此入口。令牌仅出现在 header，禁止 cookie、URL 和重定向传递。
-  // 读取完响应体后再次检查会话，避免旧请求的迟到响应覆盖重新登录/改令牌后的界面。
   async function fetchApi(path, options) {
     const opts = options || {};
     const epoch = requestEpoch;
@@ -312,9 +353,13 @@
     const timeout = setTimeout(() => request.abort.abort(), opts.timeoutMs || REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(path, {
-        method: opts.method || "GET", headers: headers,
+        method: opts.method || "GET",
+        headers,
         body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-        cache: "no-store", credentials: "omit", redirect: "error", referrerPolicy: "no-referrer",
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
         signal: request.abort.signal,
       });
       if (isStale()) throw requestError("StaleRequest");
@@ -338,6 +383,8 @@
     }
   }
 
+  // 轮询调度
+
   function canPoll() {
     return !isLocked && !isConnecting && !isSaving && !document.hidden && currentConfig !== null;
   }
@@ -348,8 +395,7 @@
       loop.timer = null;
       if (!canPoll()) return;
       loop.isRunning = true;
-      try { await loop.run(); }
-      finally {
+      try { await loop.run(); } finally {
         loop.isRunning = false;
         queuePoll(loop, loop.delay());
       }
@@ -370,18 +416,20 @@
     queuePoll(configLoop, CONFIG_POLL_MS);
   }
 
+  // 会话状态
+
   function renderSession() {
     const isReady = !isLocked && currentConfig !== null;
-    document.getElementById("dashboard").hidden = !isReady;
-    document.getElementById("settings-btn").disabled = !isReady || isSaving;
-    document.getElementById("export-toggle-btn").disabled = !isReady || isSaving;
-    document.getElementById("settings-save").disabled = !isReady || isSaving;
-    document.getElementById("logout-btn").hidden = !isReady || !sessionToken;
-    document.getElementById("logout-btn").disabled = isSaving;
-    document.getElementById("login-submit").disabled = isConnecting;
-    document.getElementById("login-token").disabled = isConnecting;
+    dom["dashboard"].hidden = !isReady;
+    dom["settings-btn"].disabled = !isReady || isSaving;
+    dom["export-toggle-btn"].disabled = !isReady || isSaving;
+    dom["settings-save"].disabled = !isReady || isSaving;
+    dom["logout-btn"].hidden = !isReady || !sessionToken;
+    dom["logout-btn"].disabled = isSaving;
+    dom["login-submit"].disabled = isConnecting;
+    dom["login-token"].disabled = isConnecting;
     if (isReady) {
-      document.getElementById("auth-status").textContent = currentConfig.auth_enabled ? "已通过令牌验证" : "当前未启用鉴权";
+      setTextIfChanged("auth-status", currentConfig.auth_enabled ? "已通过令牌验证" : "当前未启用鉴权");
     }
   }
 
@@ -394,40 +442,39 @@
     renderLogs([]);
     renderHistory();
     renderPluginUnknown("插件 状态未知");
-    document.getElementById("auth-card").hidden = false;
-    document.getElementById("auth-status").textContent = "请登录控制台";
-    document.getElementById("auth-msg").textContent = message;
-    document.getElementById("login-token").value = "";
-    document.getElementById("cfg-edit-token").value = "";
-    document.getElementById("cfg-clear-token").checked = false;
-    document.getElementById("settings-card").style.display = "none";
-    document.getElementById("card-export").style.display = "none";
+    dom["auth-card"].hidden = false;
+    setTextIfChanged("auth-status", "请登录控制台");
+    setTextIfChanged("auth-msg", message);
+    if (dom["login-token"]) dom["login-token"].value = "";
+    if (dom["cfg-edit-token"]) dom["cfg-edit-token"].value = "";
+    if (dom["cfg-clear-token"]) dom["cfg-clear-token"].checked = false;
+    dom["settings-card"].style.display = "none";
+    dom["card-export"].style.display = "none";
     renderSession();
-    if (!isConnecting) document.getElementById("login-token").focus();
+    if (!isConnecting) dom["login-token"]?.focus();
   }
 
   function renderTokenOptions() {
     const fromEnv = currentConfig && currentConfig.token_from_env === true;
     const configured = currentConfig && currentConfig.token_configured === true;
-    const clear = document.getElementById("cfg-clear-token");
-    const input = document.getElementById("cfg-edit-token");
-    clear.disabled = fromEnv || !configured;
-    if (clear.disabled) clear.checked = false;
-    input.disabled = fromEnv || clear.checked;
-    if (fromEnv || clear.checked) input.value = "";
-    document.getElementById("cfg-token-note").textContent = fromEnv
+    if (dom["cfg-clear-token"]) {
+      dom["cfg-clear-token"].disabled = fromEnv || !configured;
+      if (fromEnv || !configured) dom["cfg-clear-token"].checked = false;
+    }
+    if (dom["cfg-edit-token"]) {
+      dom["cfg-edit-token"].disabled = fromEnv || dom["cfg-clear-token"]?.checked;
+      if ((fromEnv || dom["cfg-clear-token"]?.checked) && dom["cfg-edit-token"]) dom["cfg-edit-token"].value = "";
+    }
+    setTextIfChanged("cfg-token-note", fromEnv
       ? "当前使用环境变量 MIZUKI_TOKEN，优先于配置文件；此处不能修改或清除，请在服务端修改环境变量。"
       : configured ? "已配置令牌。留空保持不变；替换后本标签页自动使用新令牌。"
-        : "尚未配置令牌。留空保持不变；填写后启用鉴权。";
+        : "尚未配置令牌。留空保持不变；填写后启用鉴权。");
   }
 
   function renderConfig(cfg, resetForm) {
     if (!isObject(cfg)) throw new Error("Invalid config");
     currentConfig = cfg;
     setText("cfg-port", pick(cfg, "port", "—"));
-    setText("cfg-interval", pick(cfg, "computer_collect_interval", "—") + " 毫秒");
-    setText("cfg-timeout", pick(cfg, "phone_timeout_ms", "—") + " 毫秒");
-    setText("cfg-auth", cfg.auth_enabled ? "已启用" : "未启用");
     const interval = number(cfg.poll_interval);
     const newInterval = interval === null ? DEFAULT_POLL_MS : Math.max(MIN_POLL_MS, Math.min(MAX_POLL_MS, interval));
     if (newInterval !== pollMs) {
@@ -439,15 +486,15 @@
       }
     }
     if (resetForm || !isSettingsDirty) {
-      document.getElementById("cfg-edit-interval").value = pick(cfg, "computer_collect_interval", "");
-      document.getElementById("cfg-edit-timeout").value = pick(cfg, "phone_timeout_ms", "");
-      document.getElementById("cfg-edit-poll").value = pollMs;
-      document.getElementById("cfg-edit-computer-enabled").checked = pick(cfg, "computer_collect_enabled", true);
+      if (dom["cfg-edit-interval"]) dom["cfg-edit-interval"].value = pick(cfg, "computer_collect_interval", "");
+      if (dom["cfg-edit-timeout"]) dom["cfg-edit-timeout"].value = pick(cfg, "phone_timeout_ms", "");
+      if (dom["cfg-edit-poll"]) dom["cfg-edit-poll"].value = pollMs;
+      if (dom["cfg-edit-computer-enabled"]) dom["cfg-edit-computer-enabled"].checked = pick(cfg, "computer_collect_enabled", true);
     }
     if (resetForm) {
       isSettingsDirty = false;
-      document.getElementById("cfg-edit-token").value = "";
-      document.getElementById("cfg-clear-token").checked = false;
+      if (dom["cfg-edit-token"]) dom["cfg-edit-token"].value = "";
+      if (dom["cfg-clear-token"]) dom["cfg-clear-token"].checked = false;
     }
     renderTokenOptions();
     renderSession();
@@ -463,20 +510,21 @@
       renderConfig(cfg, true);
       if (!cfg.auth_enabled && sessionToken) setSessionToken("");
       isLocked = false;
-      document.getElementById("auth-card").hidden = true;
-      document.getElementById("auth-msg").textContent = "";
+      dom["auth-card"].hidden = true;
+      setTextIfChanged("auth-msg", "");
       renderPluginUnknown("插件 检查中…");
     } catch (error) {
       if (!isSilentError(error)) showLogin("无法连接服务，请检查地址或网络后重试。");
     } finally {
       isConnecting = false;
       renderSession();
-      if (isLocked) document.getElementById("login-token").focus();
+      if (isLocked) dom["login-token"]?.focus();
       resumePolling();
-      // 初始请求被隐藏页面取消后，快速切回时仍需完成首次配置读取。
       if (!isLocked && !currentConfig && !document.hidden) connect(false);
     }
   }
+
+  // 轮询任务
 
   async function pollState() {
     try {
@@ -485,9 +533,9 @@
       render(state);
     } catch (error) {
       if (isSilentError(error)) return;
-      document.getElementById("status-pill").className = "status-pill unknown";
-      document.getElementById("status-text").textContent = "状态获取失败";
-      document.getElementById("state-notice").textContent = "状态刷新失败，以下内容保留上次成功获取的数据。";
+      setClass("status-pill", "status-pill unknown");
+      setTextIfChanged("status-text", "状态获取失败");
+      setTextIfChanged("state-notice", "状态刷新失败，以下内容保留上次成功获取的数据。");
     }
   }
 
@@ -495,9 +543,9 @@
     try {
       const rows = await fetchApi("/api/logs?limit=30", { background: true });
       renderLogs(normalizeRecords(rows));
-      document.getElementById("logs-status").textContent = "";
+      setTextIfChanged("logs-status", "");
     } catch (error) {
-      if (!isSilentError(error)) document.getElementById("logs-status").textContent = "日志刷新失败，保留上次记录。";
+      if (!isSilentError(error)) setTextIfChanged("logs-status", "日志刷新失败，保留上次记录。");
     }
   }
 
@@ -506,9 +554,9 @@
       const rows = await fetchApi("/api/logs?record_type=phone&limit=20", { background: true });
       historyData = normalizeRecords(rows);
       renderHistory();
-      document.getElementById("history-status").textContent = "";
+      setTextIfChanged("history-status", "");
     } catch (error) {
-      if (!isSilentError(error)) document.getElementById("history-status").textContent = "历史刷新失败，保留上次记录。";
+      if (!isSilentError(error)) setTextIfChanged("history-status", "历史刷新失败，保留上次记录。");
     }
   }
 
@@ -519,9 +567,9 @@
   async function pollConfig() {
     try {
       renderConfig(await fetchApi("/api/config", { background: true }), false);
-      document.getElementById("config-status").textContent = "";
+      setTextIfChanged("config-status", "");
     } catch (error) {
-      if (!isSilentError(error)) document.getElementById("config-status").textContent = "配置刷新失败，暂用上次配置。";
+      if (!isSilentError(error)) setTextIfChanged("config-status", "配置刷新失败，暂用上次配置。");
     }
   }
 
@@ -537,15 +585,16 @@
     }
   }
 
+  // 设置保存
+
   function buildConfigUpdate() {
-    const body = { computer_collect_enabled: document.getElementById("cfg-edit-computer-enabled").checked };
+    const body = { computer_collect_enabled: dom["cfg-edit-computer-enabled"].checked };
     const fields = [
-      ["computer_collect_interval", "cfg-edit-interval", "采集间隔"],
-      ["phone_timeout_ms", "cfg-edit-timeout", "离线判定"],
-      ["poll_interval", "cfg-edit-poll", "轮询间隔"],
+      ["computer_collect_interval", dom["cfg-edit-interval"], "采集间隔"],
+      ["phone_timeout_ms", dom["cfg-edit-timeout"], "离线判定"],
+      ["poll_interval", dom["cfg-edit-poll"], "轮询间隔"],
     ];
-    for (const [key, id, label] of fields) {
-      const input = document.getElementById(id);
+    for (const [key, input, label] of fields) {
       const value = number(input.value);
       if (value === null || !Number.isInteger(value) || value < Number(input.min) || value > Number(input.max)) {
         throw new Error(label + "必须为 " + input.min + "～" + input.max + " 毫秒的整数。");
@@ -553,8 +602,8 @@
       body[key] = value;
     }
     if (currentConfig.token_from_env !== true) {
-      const token = document.getElementById("cfg-edit-token").value.trim();
-      if (document.getElementById("cfg-clear-token").checked && currentConfig.token_configured === true) body.shared_token = "";
+      const token = dom["cfg-edit-token"].value.trim();
+      if (dom["cfg-clear-token"].checked && currentConfig.token_configured === true) body.shared_token = "";
       else if (token) body.shared_token = token;
     }
     return body;
@@ -562,25 +611,24 @@
 
   async function saveSettings() {
     if (isLocked || isSaving || isConnecting || !currentConfig) return;
-    const msg = document.getElementById("settings-msg");
     let body;
-    try { body = buildConfigUpdate(); }
-    catch (error) {
-      msg.className = "settings-msg error";
-      msg.textContent = error.message;
+    try {
+      body = buildConfigUpdate();
+    } catch (error) {
+      setClass("settings-msg", "settings-msg error");
+      setTextIfChanged("settings-msg", error.message);
       return;
     }
     isSaving = true;
     pausePolling();
     cancelRequests(false);
     renderSession();
-    msg.className = "settings-msg";
-    msg.textContent = "正在保存…";
+    setClass("settings-msg", "settings-msg");
+    setTextIfChanged("settings-msg", "正在保存…");
     let hasSaved = false;
     try {
-      await fetchApi("/api/config", { method: "PATCH", body: body });
+      await fetchApi("/api/config", { method: "PATCH", body });
       hasSaved = true;
-      // PATCH 完成后先切换会话，再读取配置，防止新令牌生效后被下一次 GET 登出。
       if (Object.prototype.hasOwnProperty.call(body, "shared_token")) {
         setSessionToken(body.shared_token);
         currentConfig.auth_enabled = Boolean(body.shared_token);
@@ -591,12 +639,12 @@
       }
       renderConfig(currentConfig, true);
       renderConfig(await fetchApi("/api/config"), true);
-      document.getElementById("config-status").textContent = "";
-      msg.textContent = "已保存";
+      setTextIfChanged("config-status", "");
+      setTextIfChanged("settings-msg", "已保存");
     } catch (error) {
       if (!isSilentError(error)) {
-        msg.className = "settings-msg error";
-        msg.textContent = hasSaved ? "已保存，配置暂时无法刷新。" : "保存失败，请检查连接与配置后重试。";
+        setClass("settings-msg", "settings-msg error");
+        setTextIfChanged("settings-msg", hasSaved ? "已保存，配置暂时无法刷新。" : "保存失败，请检查连接与配置后重试。");
       }
     } finally {
       isSaving = false;
@@ -606,18 +654,17 @@
   }
 
   function showExportMsg(text, isError) {
-    const msg = document.getElementById("export-msg");
     clearTimeout(exportMessageTimer);
-    msg.textContent = text;
-    msg.className = "export-msg" + (isError ? " error" : "");
-    exportMessageTimer = setTimeout(() => { msg.textContent = ""; }, 3000);
+    setTextIfChanged("export-msg", text);
+    setClass("export-msg", "export-msg" + (isError ? " error" : ""));
+    exportMessageTimer = setTimeout(() => setTextIfChanged("export-msg", ""), 3000);
   }
 
   async function download(format) {
     if (isLocked || isSaving || isExporting || !currentConfig) return;
     isExporting = true;
-    const buttons = [document.getElementById("export-json"), document.getElementById("export-csv")];
-    buttons.forEach((button) => { button.disabled = true; });
+    dom["export-json"].disabled = true;
+    dom["export-csv"].disabled = true;
     let url = null;
     try {
       const blob = await fetchApi("/api/export/" + format, { responseType: "blob" });
@@ -633,50 +680,61 @@
     } finally {
       if (url) setTimeout(() => URL.revokeObjectURL(url), 1000);
       isExporting = false;
-      buttons.forEach((button) => { button.disabled = false; });
+      dom["export-json"].disabled = false;
+      dom["export-csv"].disabled = false;
     }
   }
 
-  document.getElementById("auth-form").addEventListener("submit", function (event) {
+  // 事件绑定
+
+  dom["auth-form"]?.addEventListener("submit", function (event) {
     event.preventDefault();
     if (isConnecting || isSaving) return;
-    setSessionToken(document.getElementById("login-token").value.trim());
-    document.getElementById("login-token").value = "";
-    document.getElementById("auth-msg").textContent = "正在验证…";
+    setSessionToken(dom["login-token"].value.trim());
+    dom["login-token"].value = "";
+    setTextIfChanged("auth-msg", "正在验证…");
     connect(true);
   });
-  document.getElementById("logout-btn").addEventListener("click", function () {
+
+  dom["logout-btn"]?.addEventListener("click", function () {
     if (isSaving) return;
     setSessionToken("");
     showLogin("已退出当前标签页；输入令牌可重新登录。");
   });
-  document.getElementById("settings-save").addEventListener("click", saveSettings);
-  document.querySelectorAll(".settings-form input").forEach(function (input) {
+
+  dom["settings-save"]?.addEventListener("click", saveSettings);
+
+  for (const input of document.querySelectorAll("#settings-card .settings-form input")) {
     input.addEventListener("input", () => { isSettingsDirty = true; });
     input.addEventListener("change", () => { isSettingsDirty = true; });
+  }
+
+  dom["cfg-clear-token"]?.addEventListener("change", renderTokenOptions);
+
+  dom["settings-btn"]?.addEventListener("click", function () {
+    dom["settings-card"].style.display = dom["settings-card"].style.display === "none" ? "block" : "none";
   });
-  document.getElementById("cfg-clear-token").addEventListener("change", renderTokenOptions);
-  document.getElementById("settings-btn").addEventListener("click", function () {
-    const card = document.getElementById("settings-card");
-    card.style.display = card.style.display === "none" ? "block" : "none";
+
+  dom["settings-close"]?.addEventListener("click", function () {
+    dom["settings-card"].style.display = "none";
   });
-  document.getElementById("settings-close").addEventListener("click", function () {
-    document.getElementById("settings-card").style.display = "none";
+
+  dom["export-toggle-btn"]?.addEventListener("click", function () {
+    dom["card-export"].style.display = dom["card-export"].style.display === "none" ? "block" : "none";
   });
-  document.getElementById("export-toggle-btn").addEventListener("click", function () {
-    const card = document.getElementById("card-export");
-    card.style.display = card.style.display === "none" ? "block" : "none";
-  });
-  document.getElementById("export-json").addEventListener("click", () => download("json"));
-  document.getElementById("export-csv").addEventListener("click", () => download("csv"));
-  document.querySelectorAll(".history-tab").forEach(function (tab) {
+
+  dom["export-json"]?.addEventListener("click", () => download("json"));
+  dom["export-csv"]?.addEventListener("click", () => download("csv"));
+
+  for (const tab of document.querySelectorAll(".history-tab")) {
     tab.addEventListener("click", function () {
-      document.querySelectorAll(".history-tab").forEach((item) => item.classList.remove("active"));
+      document.querySelectorAll(".history-tab").forEach((t) => t.classList.remove("active"));
       tab.classList.add("active");
       historyMetric = tab.dataset.metric;
       renderHistory();
     });
-  });
+  }
+
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) pausePolling();
     else if (!isLocked && !currentConfig) connect(false);
@@ -685,14 +743,16 @@
       resumePolling();
     }
   });
+
   window.addEventListener("pagehide", pausePolling);
   window.addEventListener("pageshow", function () {
     if (!isLocked && !currentConfig) connect(false);
     else resumePolling();
   });
 
-  // 夜间模式（圆形扩展动画），主题可长期保存，令牌始终仅限当前标签页。
-  const themeBtn = document.getElementById("theme-btn");
+  // 夜间模式
+
+  const themeBtn = dom["theme-btn"];
   let isDark = false;
   try { isDark = localStorage.getItem("mizuki-dark") === "1"; } catch (_) { /* 默认日间模式 */ }
 
@@ -725,9 +785,10 @@
   }
 
   setTheme(isDark);
-  themeBtn.addEventListener("click", function () {
+  themeBtn?.addEventListener("click", function () {
     const rect = themeBtn.getBoundingClientRect();
     setTheme(!document.documentElement.classList.contains("dark"), rect.left + rect.width / 2, rect.top + rect.height / 2);
   });
+
   connect(false);
 })();

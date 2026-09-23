@@ -12,16 +12,14 @@
     <!-- 顶栏 -->
     <header class="topbar">
       <div class="brand">
-        <div>
-          <h1 class="brand-title">海月之音</h1>
-        </div>
+        <h1 class="brand-title">海月之音</h1>
       </div>
       <div class="topbar-right">
-        <span class="auth-status" id="auth-status" role="status">正在连接…</span>
+        <span class="auth-status" id="auth-status" role="status" aria-live="polite">正在连接…</span>
         <button class="btn-export" id="logout-btn" type="button" hidden>退出登录</button>
-        <button class="icon-btn" id="theme-btn" type="button" title="夜间模式">🌙</button>
-        <button class="icon-btn" id="export-toggle-btn" type="button" title="数据导出" disabled>📦</button>
-        <button class="icon-btn" id="settings-btn" type="button" title="设置" disabled>⚙</button>
+        <button class="icon-btn" id="theme-btn" type="button" title="夜间模式" aria-label="切换夜间模式">🌙</button>
+        <button class="icon-btn" id="export-toggle-btn" type="button" title="数据导出" aria-label="数据导出" disabled>📦</button>
+        <button class="icon-btn" id="settings-btn" type="button" title="设置" aria-label="设置" disabled>⚙</button>
       </div>
     </header>
 
@@ -39,203 +37,204 @@
     </section>
 
     <div id="dashboard" hidden>
-    <p class="data-notice" id="state-notice" role="status"></p>
-    <!-- 设置面板 -->
-    <section class="card settings-card" id="settings-card" style="display:none">
-      <div class="card-head">
-        <h2>⚙️ 设置</h2>
-        <button class="btn-close" id="settings-close" type="button">✕</button>
-      </div>
-      <div class="settings-form">
-        <div class="field">
-          <label for="cfg-edit-interval">采集间隔（毫秒）</label>
-          <input type="number" id="cfg-edit-interval" min="100" max="300000" step="100" />
-        </div>
-        <div class="field">
-          <label for="cfg-edit-timeout">离线判定（毫秒）</label>
-          <input type="number" id="cfg-edit-timeout" min="100" max="600000" step="1000" />
-        </div>
-        <div class="field">
-          <label for="cfg-edit-token">替换共享令牌</label>
-          <input type="password" id="cfg-edit-token" autocomplete="off" spellcheck="false" aria-describedby="cfg-token-note" placeholder="留空保持现有令牌" />
-          <small class="field-note" id="cfg-token-note">留空保持不变。</small>
-        </div>
-        <div class="field field--checkbox">
-          <input type="checkbox" id="cfg-clear-token" />
-          <label for="cfg-clear-token">清除现有令牌并关闭鉴权</label>
-        </div>
-        <div class="field">
-          <label for="cfg-edit-poll">轮询间隔（毫秒）</label>
-          <input type="number" id="cfg-edit-poll" min="100" max="60000" step="100" />
-        </div>
-        <div class="field field--checkbox">
-          <label for="cfg-edit-computer-enabled">启用电脑状态采集</label>
-          <input type="checkbox" id="cfg-edit-computer-enabled" />
-        </div>
-        <div class="settings-actions">
-          <button class="btn-save" id="settings-save" type="button">保存</button>
-          <span class="settings-msg" id="settings-msg"></span>
-        </div>
-      </div>
-      <p class="data-notice" id="config-status" role="status"></p>
-    </section>
+      <p class="data-notice" id="state-notice" role="status"></p>
 
-    <!-- 数据导出（全宽，默认隐藏，点击顶栏按钮展开） -->
-    <section class="card card--span2" id="card-export" style="display:none">
-      <div class="card-head">
-        <h2>📦 数据导出</h2>
-        <div class="export-actions">
-          <button class="btn-export" id="export-json" type="button">导出 JSON</button>
-          <button class="btn-export" id="export-csv" type="button">导出 CSV</button>
-          <span class="export-msg" id="export-msg"></span>
-        </div>
-      </div>
-      <div class="kv">
-        <div class="kv-row"><span class="kv-key">说明</span><span class="kv-val">导出全部落盘数据到本地文件（JSON 为完整结构，CSV 为展平表格）。</span></div>
-      </div>
-    </section>
-
-    <!-- 卡片网格 -->
-    <main class="grid">
-      <!-- 系统硬件（顶部全宽） -->
-      <section class="card card--span2" id="card-hardware">
-        <div class="card-head"><h2>🖥️ 系统硬件</h2></div>
-        <div class="hardware-grid">
-          <div class="hw-gauge">
-            <svg class="hw-ring" viewBox="0 0 100 100">
-              <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
-              <circle class="hw-ring-fill hw-ring-cpu" cx="50" cy="50" r="42" />
-            </svg>
-            <div class="hw-gauge-center"><span id="hw-cpu-pct">—</span><small>%</small></div>
-            <div class="hw-gauge-label">CPU</div>
-          </div>
-          <div class="hw-gauge">
-            <svg class="hw-ring" viewBox="0 0 100 100">
-              <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
-              <circle class="hw-ring-fill hw-ring-mem" cx="50" cy="50" r="42" />
-            </svg>
-            <div class="hw-gauge-center"><span id="hw-mem-pct">—</span><small>%</small></div>
-            <div class="hw-gauge-label">内存 <span id="hw-mem-sub" class="hw-sub">—</span></div>
-          </div>
-          <div class="hw-gauge">
-            <svg class="hw-ring" viewBox="0 0 100 100">
-              <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
-              <circle class="hw-ring-fill hw-ring-disk" cx="50" cy="50" r="42" />
-            </svg>
-            <div class="hw-gauge-center"><span id="hw-disk-pct">—</span><small>%</small></div>
-            <div class="hw-gauge-label">磁盘 <span id="hw-disk-sub" class="hw-sub">—</span></div>
-          </div>
-        </div>
-      </section>
-
-      <!-- 手机状态（连接 + 使用合并） -->
-      <section class="card card--span2" id="card-phone-conn">
+      <!-- 设置面板 -->
+      <section class="card settings-card" id="settings-card" style="display:none">
         <div class="card-head">
-          <h2>📱 手机状态</h2>
-          <span class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">连接中…</span></span>
+          <h2>⚙️ 设置</h2>
+          <button class="btn-close" id="settings-close" type="button">✕</button>
+        </div>
+        <div class="settings-form">
+          <div class="field">
+            <label for="cfg-edit-interval">采集间隔（毫秒）</label>
+            <input type="number" id="cfg-edit-interval" min="100" max="300000" step="100" />
+          </div>
+          <div class="field">
+            <label for="cfg-edit-timeout">离线判定（毫秒）</label>
+            <input type="number" id="cfg-edit-timeout" min="100" max="600000" step="1000" />
+          </div>
+          <div class="field">
+            <label for="cfg-edit-token">替换共享令牌</label>
+            <input type="password" id="cfg-edit-token" autocomplete="off" spellcheck="false" aria-describedby="cfg-token-note" placeholder="留空保持现有令牌" />
+            <small class="field-note" id="cfg-token-note">留空保持不变。</small>
+          </div>
+          <div class="field field--checkbox">
+            <input type="checkbox" id="cfg-clear-token" />
+            <label for="cfg-clear-token">清除现有令牌并关闭鉴权</label>
+          </div>
+          <div class="field">
+            <label for="cfg-edit-poll">轮询间隔（毫秒）</label>
+            <input type="number" id="cfg-edit-poll" min="100" max="60000" step="100" />
+          </div>
+          <div class="field field--checkbox">
+            <label for="cfg-edit-computer-enabled">启用电脑状态采集</label>
+            <input type="checkbox" id="cfg-edit-computer-enabled" />
+          </div>
+          <div class="settings-actions">
+            <button class="btn-save" id="settings-save" type="button">保存</button>
+            <span class="settings-msg" id="settings-msg"></span>
+          </div>
+        </div>
+        <p class="data-notice" id="config-status" role="status"></p>
+      </section>
+
+      <!-- 数据导出 -->
+      <section class="card card--span2" id="card-export" style="display:none">
+        <div class="card-head">
+          <h2>📦 数据导出</h2>
+          <div class="export-actions">
+            <button class="btn-export" id="export-json" type="button">导出 JSON</button>
+            <button class="btn-export" id="export-csv" type="button">导出 CSV</button>
+            <span class="export-msg" id="export-msg"></span>
+          </div>
         </div>
         <div class="kv">
-          <div class="kv-row"><span class="kv-key">设备 ID</span><span class="kv-val" id="conn-device">—</span></div>
-          <div class="kv-row"><span class="kv-key">最近上报</span><span class="kv-val" id="conn-last-seen">—</span></div>
-          <div class="kv-row"><span class="kv-key">前台应用</span><span class="kv-val" id="use-app">—</span></div>
-          <div class="kv-row"><span class="kv-key">导航中</span><span class="kv-val" id="use-nav">—</span></div>
-          <div class="kv-row"><span class="kv-key">通话中</span><span class="kv-val" id="use-call">—</span></div>
+          <div class="kv-row"><span class="kv-key">说明</span><span class="kv-val">导出全部落盘数据到本地文件（JSON 为完整结构，CSV 为展平表格）。</span></div>
         </div>
       </section>
 
-      <!-- 位置与天气 -->
-      <section class="card card--span2">
-        <div class="card-head"><h2>🌤 位置与天气</h2></div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">城市</span><span class="kv-val" id="loc-city">—</span></div>
-          <div class="kv-row"><span class="kv-key">纬度</span><span class="kv-val" id="loc-lat">—</span></div>
-          <div class="kv-row"><span class="kv-key">经度</span><span class="kv-val" id="loc-lng">—</span></div>
-          <div class="kv-row"><span class="kv-key">天气状况</span><span class="kv-val" id="wth-condition">—</span></div>
-          <div class="kv-row"><span class="kv-key">温度</span><span class="kv-val" id="wth-temp">—</span></div>
-          <div class="kv-row"><span class="kv-key">湿度</span><span class="kv-val" id="wth-humidity">—</span></div>
+      <!-- 卡片网格 -->
+      <main class="grid">
+        <!-- 系统硬件 -->
+        <section class="card card--span2" id="card-hardware">
+          <div class="card-head"><h2>🖥️ 系统硬件</h2></div>
+          <div class="hardware-grid">
+            <div class="hw-gauge">
+              <svg class="hw-ring" viewBox="0 0 100 100" role="img" aria-label="CPU 使用率">
+                <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
+                <circle class="hw-ring-fill hw-ring-cpu" cx="50" cy="50" r="42" />
+              </svg>
+              <div class="hw-gauge-center"><span id="hw-cpu-pct">—</span><small>%</small></div>
+              <div class="hw-gauge-label">CPU</div>
+            </div>
+            <div class="hw-gauge">
+              <svg class="hw-ring" viewBox="0 0 100 100" role="img" aria-label="内存使用率">
+                <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
+                <circle class="hw-ring-fill hw-ring-mem" cx="50" cy="50" r="42" />
+              </svg>
+              <div class="hw-gauge-center"><span id="hw-mem-pct">—</span><small>%</small></div>
+              <div class="hw-gauge-label">内存 <span id="hw-mem-sub" class="hw-sub">—</span></div>
+            </div>
+            <div class="hw-gauge">
+              <svg class="hw-ring" viewBox="0 0 100 100" role="img" aria-label="磁盘使用率">
+                <circle class="hw-ring-bg" cx="50" cy="50" r="42" />
+                <circle class="hw-ring-fill hw-ring-disk" cx="50" cy="50" r="42" />
+              </svg>
+              <div class="hw-gauge-center"><span id="hw-disk-pct">—</span><small>%</small></div>
+              <div class="hw-gauge-label">磁盘 <span id="hw-disk-sub" class="hw-sub">—</span></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 手机状态 -->
+        <section class="card card--span2" id="card-phone-conn">
+          <div class="card-head">
+            <h2>📱 手机状态</h2>
+            <span class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">连接中…</span></span>
+          </div>
+          <div class="kv">
+            <div class="kv-row"><span class="kv-key">设备 ID</span><span class="kv-val" id="conn-device">—</span></div>
+            <div class="kv-row"><span class="kv-key">最近上报</span><span class="kv-val" id="conn-last-seen">—</span></div>
+            <div class="kv-row"><span class="kv-key">前台应用</span><span class="kv-val" id="use-app">—</span></div>
+            <div class="kv-row"><span class="kv-key">导航中</span><span class="kv-val" id="use-nav">—</span></div>
+            <div class="kv-row"><span class="kv-key">通话中</span><span class="kv-val" id="use-call">—</span></div>
+          </div>
+        </section>
+
+        <!-- 位置与天气 -->
+        <section class="card card--span2">
+          <div class="card-head"><h2>🌤 位置与天气</h2></div>
+          <div class="kv">
+            <div class="kv-row"><span class="kv-key">城市</span><span class="kv-val" id="loc-city">—</span></div>
+            <div class="kv-row"><span class="kv-key">纬度</span><span class="kv-val" id="loc-lat">—</span></div>
+            <div class="kv-row"><span class="kv-key">经度</span><span class="kv-val" id="loc-lng">—</span></div>
+            <div class="kv-row"><span class="kv-key">天气状况</span><span class="kv-val" id="wth-condition">—</span></div>
+            <div class="kv-row"><span class="kv-key">温度</span><span class="kv-val" id="wth-temp">—</span></div>
+            <div class="kv-row"><span class="kv-key">湿度</span><span class="kv-val" id="wth-humidity">—</span></div>
+          </div>
+        </section>
+
+        <!-- 手机诊断 -->
+        <section class="card card--span2">
+          <div class="card-head"><h2>🔧 手机诊断</h2></div>
+          <div class="kv">
+            <div class="kv-row"><span class="kv-key">APP 版本</span><span class="kv-val" id="diag-version">—</span></div>
+            <div class="kv-row"><span class="kv-key">运行时长</span><span class="kv-val" id="diag-uptime">—</span></div>
+            <div class="kv-row"><span class="kv-key">上报成功 / 失败</span><span class="kv-val" id="diag-send">—</span></div>
+            <div class="kv-row"><span class="kv-key">权限</span><span class="kv-val" id="diag-perms">—</span></div>
+            <div class="kv-row"><span class="kv-key">警告</span><span class="kv-val" id="diag-warnings">—</span></div>
+            <div class="kv-row"><span class="kv-key">最近错误</span><span class="kv-val" id="diag-error">—</span></div>
+          </div>
+        </section>
+
+        <!-- 健康 -->
+        <section class="card card--span2">
+          <div class="card-head"><h2>❤️ 健康</h2></div>
+          <div class="kv">
+            <div class="kv-row"><span class="kv-key">心率</span><span class="kv-val" id="hlt-heart">—</span></div>
+            <div class="kv-row"><span class="kv-key">步数</span><span class="kv-val" id="hlt-steps">—</span></div>
+            <div class="kv-row"><span class="kv-key">睡眠</span><span class="kv-val" id="hlt-sleep">—</span></div>
+          </div>
+        </section>
+
+        <!-- 电脑状态 -->
+        <section class="card">
+          <div class="card-head">
+            <h2>💻 电脑状态</h2>
+            <span class="status-pill" id="plugin-pill"><span class="dot"></span><span id="plugin-text">插件</span></span>
+          </div>
+          <div class="kv">
+            <div class="kv-row"><span class="kv-key">本地 IP</span><span class="kv-val" id="pc-ip">—</span></div>
+            <div class="kv-row"><span class="kv-key">前台窗口</span><span class="kv-val" id="pc-window">—</span></div>
+            <div class="kv-row"><span class="kv-key">进程</span><span class="kv-val" id="pc-process">—</span></div>
+            <div class="kv-row"><span class="kv-key">状态</span><span class="kv-val" id="pc-flags">—</span></div>
+          </div>
+        </section>
+
+        <!-- 关于 -->
+        <section class="card">
+          <div class="card-head"><h2>ℹ️ 关于</h2></div>
+          <div class="kv">
+            <div class="kv-row"><span class="kv-key">版本</span><span class="kv-val" id="srv-version">—</span></div>
+            <div class="kv-row"><span class="kv-key">已运行</span><span class="kv-val" id="srv-uptime">—</span></div>
+            <div class="kv-row"><span class="kv-key">端口</span><span class="kv-val" id="cfg-port">—</span></div>
+            <div class="kv-row"><span class="kv-key">最后刷新</span><span class="kv-val" id="srv-refresh">—</span></div>
+          </div>
+        </section>
+      </main>
+
+      <!-- 历史数据 -->
+      <section class="card card--span2" id="card-history">
+        <div class="card-head">
+          <h2>📊 历史数据</h2>
+          <div class="history-tabs">
+            <button class="history-tab active" data-metric="heart_rate">心率</button>
+            <button class="history-tab" data-metric="steps">步数</button>
+          </div>
         </div>
+        <p class="data-notice" id="history-status" role="status"></p>
+        <div class="history-chart" id="history-chart">
+          <div class="history-bars" id="history-bars"></div>
+          <div class="history-labels" id="history-labels"></div>
+        </div>
+        <div class="history-empty" id="history-empty">暂无数据</div>
       </section>
 
-      <!-- 手机诊断 -->
-      <section class="card card--span2">
-        <div class="card-head"><h2>🔧 手机诊断</h2></div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">APP 版本</span><span class="kv-val" id="diag-version">—</span></div>
-          <div class="kv-row"><span class="kv-key">运行时长</span><span class="kv-val" id="diag-uptime">—</span></div>
-          <div class="kv-row"><span class="kv-key">上报成功 / 失败</span><span class="kv-val" id="diag-send">—</span></div>
-          <div class="kv-row"><span class="kv-key">权限</span><span class="kv-val" id="diag-perms">—</span></div>
-          <div class="kv-row"><span class="kv-key">警告</span><span class="kv-val" id="diag-warnings">—</span></div>
-          <div class="kv-row"><span class="kv-key">最近错误</span><span class="kv-val" id="diag-error">—</span></div>
+      <!-- 上传日志 -->
+      <section class="logs logs--full">
+        <div class="logs-head">
+          <h2>📋 上传日志</h2>
+          <span class="tag" id="logs-count">0 条</span>
+        </div>
+        <p class="data-notice" id="logs-status" role="status"></p>
+        <div class="logs-body" id="logs-body">
+          <div class="logs-empty">暂无记录</div>
         </div>
       </section>
-
-      <!-- 健康 -->
-      <section class="card card--span2">
-        <div class="card-head"><h2>❤️ 健康</h2></div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">心率</span><span class="kv-val" id="hlt-heart">—</span></div>
-          <div class="kv-row"><span class="kv-key">步数</span><span class="kv-val" id="hlt-steps">—</span></div>
-          <div class="kv-row"><span class="kv-key">睡眠</span><span class="kv-val" id="hlt-sleep">—</span></div>
-        </div>
-      </section>
-
-      <!-- 电脑状态 -->
-      <section class="card">
-        <div class="card-head"><h2>💻 电脑状态</h2>
-          <span class="status-pill" id="plugin-pill"><span class="dot"></span><span id="plugin-text">插件</span></span>
-        </div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">本地 IP</span><span class="kv-val" id="pc-ip">—</span></div>
-          <div class="kv-row"><span class="kv-key">前台窗口</span><span class="kv-val" id="pc-window">—</span></div>
-          <div class="kv-row"><span class="kv-key">进程</span><span class="kv-val" id="pc-process">—</span></div>
-          <div class="kv-row"><span class="kv-key">状态</span><span class="kv-val" id="pc-flags">—</span></div>
-        </div>
-      </section>
-
-      <!-- 关于 -->
-      <section class="card">
-        <div class="card-head"><h2>ℹ️ 关于</h2></div>
-        <div class="kv">
-          <div class="kv-row"><span class="kv-key">版本</span><span class="kv-val" id="srv-version">—</span></div>
-          <div class="kv-row"><span class="kv-key">已运行</span><span class="kv-val" id="srv-uptime">—</span></div>
-          <div class="kv-row"><span class="kv-key">端口</span><span class="kv-val" id="cfg-port">—</span></div>
-          <div class="kv-row"><span class="kv-key">最后刷新</span><span class="kv-val" id="srv-refresh">—</span></div>
-        </div>
-      </section>
-    </main>
-
-    <!-- 历史数据（全宽） -->
-    <section class="card card--span2" id="card-history">
-      <div class="card-head">
-        <h2>📊 历史数据</h2>
-        <div class="history-tabs">
-          <button class="history-tab active" data-metric="heart_rate">心率</button>
-          <button class="history-tab" data-metric="steps">步数</button>
-        </div>
-      </div>
-      <p class="data-notice" id="history-status" role="status"></p>
-      <div class="history-chart" id="history-chart">
-        <div class="history-bars" id="history-bars"></div>
-        <div class="history-labels" id="history-labels"></div>
-      </div>
-      <div class="history-empty" id="history-empty">暂无数据</div>
-    </section>
-
-    <!-- 上传日志（全宽） -->
-    <section class="logs logs--full">
-      <div class="logs-head">
-        <h2>📋 上传日志</h2>
-        <span class="tag" id="logs-count">0 条</span>
-      </div>
-      <p class="data-notice" id="logs-status" role="status"></p>
-      <div class="logs-body" id="logs-body">
-        <div class="logs-empty">暂无记录</div>
-      </div>
-    </section>
     </div>
-
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js" defer></script>
 </body>
 </html>

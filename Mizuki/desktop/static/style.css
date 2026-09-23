@@ -257,9 +257,11 @@ html.dark body::before {
 
 .hardware-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 12px;
   padding: 8px 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .hw-gauge {
@@ -267,12 +269,14 @@ html.dark body::before {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .hw-ring {
-  width: 90px;
-  height: 90px;
+  width: 72px;
+  height: 72px;
+  max-width: 100%;
   transform: rotate(-90deg);
 }
 
@@ -301,11 +305,11 @@ html.dark body::before {
 
 .hw-gauge-center {
   position: absolute;
-  top: 32px;
+  top: 26px;
   left: 0;
   right: 0;
   text-align: center;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
